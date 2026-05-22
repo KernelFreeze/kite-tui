@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use time::{OffsetDateTime, macros::format_description};
 
@@ -26,6 +26,10 @@ pub fn draw(frame: &mut Frame<'_>, app: &AppState) {
     render_header(frame, app, vertical[0]);
     render_body(frame, app, vertical[1]);
     render_status(frame, app, vertical[2]);
+
+    if app.config_open {
+        render_category_config_popup(frame, app, area);
+    }
 }
 
 fn render_header(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
@@ -54,7 +58,7 @@ fn render_header(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
 fn render_body(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(8), Constraint::Min(8)])
+        .constraints([Constraint::Length(2), Constraint::Min(8)])
         .split(area);
 
     render_categories(frame, app, rows[0]);
@@ -67,52 +71,123 @@ fn render_body(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
 
 fn render_categories(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     let visible_categories = app.filtered_category_indices();
-    let items = if visible_categories.is_empty() {
+    if visible_categories.is_empty() {
         let message = if app.has_category_filter() {
             "No matching categories."
         } else {
             "No categories loaded."
         };
-        vec![ListItem::new(message)]
-    } else {
-        visible_categories
-            .into_iter()
-            .filter_map(|index| {
-                app.categories.get(index).map(|category| {
-                    let marker = if index == app.selected_category {
-                        ">"
-                    } else if Some(index) == app.loaded_category {
-                        "*"
-                    } else {
-                        " "
-                    };
-                    let style = if index == app.selected_category {
-                        Style::default().fg(Color::Black).bg(Color::Cyan)
-                    } else {
-                        Style::default()
-                    };
+        frame.render_widget(
+            Paragraph::new(message).style(Style::default().fg(Color::DarkGray)),
+            area,
+        );
+        return;
+    }
 
-                    ListItem::new(Line::from(vec![
-                        Span::raw(marker),
-                        Span::raw(" "),
-                        Span::raw(category.name.clone()),
-                    ]))
-                    .style(style)
-                })
-            })
-            .collect::<Vec<_>>()
-    };
-
-    let title = if app.category_filter_active || app.has_category_filter() {
-        format!("Categories /{}", app.category_filter)
-    } else {
-        "Categories".to_owned()
-    };
-    let block = focused_block(
-        title,
-        app.focus == Focus::Categories || app.category_filter_active,
+    frame.render_widget(
+        Paragraph::new(category_tabs(app, &visible_categories, area.width)),
+        area,
     );
-    frame.render_widget(List::new(items).block(block), area);
+}
+
+fn category_tabs(app: &AppState, visible_categories: &[usize], width: u16) -> Text<'static> {
+    let window = category_tab_window(app, visible_categories, width);
+    let mut labels = Vec::new();
+    let mut underlines = Vec::new();
+
+    for (position, index) in visible_categories[window].iter().copied().enumerate() {
+        let Some(category) = app.categories.get(index) else {
+            continue;
+        };
+
+        if position > 0 {
+            labels.push(Span::raw("   "));
+            underlines.push(Span::raw("   "));
+        }
+
+        let name_width = category.name.chars().count();
+        labels.push(Span::styled(
+            category.name.clone(),
+            category_tab_style(app, index),
+        ));
+
+        if index == app.selected_category {
+            underlines.push(Span::styled(
+                "-".repeat(name_width),
+                Style::default().fg(Color::Yellow),
+            ));
+        } else {
+            underlines.push(Span::raw(" ".repeat(name_width)));
+        }
+    }
+
+    Text::from(vec![Line::from(labels), Line::from(underlines)])
+}
+
+fn category_tab_window(
+    app: &AppState,
+    visible_categories: &[usize],
+    width: u16,
+) -> std::ops::Range<usize> {
+    let selected_position = visible_categories
+        .iter()
+        .position(|index| *index == app.selected_category)
+        .unwrap_or(0);
+    let max_width = width as usize;
+    let mut start = selected_position;
+    let mut end = selected_position + 1;
+
+    loop {
+        let mut expanded = false;
+        if end < visible_categories.len()
+            && category_tabs_width(app, visible_categories, start..end + 1) <= max_width
+        {
+            end += 1;
+            expanded = true;
+        }
+        if start > 0 && category_tabs_width(app, visible_categories, start - 1..end) <= max_width {
+            start -= 1;
+            expanded = true;
+        }
+        if !expanded {
+            break;
+        }
+    }
+
+    start..end
+}
+
+fn category_tabs_width(
+    app: &AppState,
+    visible_categories: &[usize],
+    window: std::ops::Range<usize>,
+) -> usize {
+    let tab_count = window.end.saturating_sub(window.start);
+    let gap_width = tab_count.saturating_sub(1) * 3;
+    let labels_width = visible_categories[window]
+        .iter()
+        .filter_map(|index| app.categories.get(*index))
+        .map(|category| category.name.chars().count())
+        .sum::<usize>();
+
+    labels_width + gap_width
+}
+
+fn category_tab_style(app: &AppState, index: usize) -> Style {
+    if index == app.selected_category {
+        let color = if app.focus == Focus::Categories || app.category_filter_active {
+            Color::White
+        } else {
+            Color::Gray
+        };
+        return Style::default().fg(color).add_modifier(Modifier::BOLD);
+    }
+
+    if Some(index) == app.loaded_category {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    }
 }
 
 fn render_articles(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
@@ -150,7 +225,9 @@ fn render_articles(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     };
 
     let block = focused_block("Articles", app.focus == Focus::Articles);
-    frame.render_widget(List::new(items).block(block), area);
+    let mut list_state = ListState::default();
+    list_state.select((!app.articles.is_empty()).then_some(app.selected_article));
+    frame.render_stateful_widget(List::new(items).block(block), area, &mut list_state);
 }
 
 fn render_article_detail(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
@@ -167,8 +244,135 @@ fn render_article_detail(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
+fn render_category_config_popup(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
+    let popup = centered_rect(86, 86, area);
+    frame.render_widget(Clear, popup);
+
+    let block = focused_block("Category Settings", true);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Length(3),
+            Constraint::Min(5),
+        ])
+        .split(inner);
+
+    render_enabled_category_summary(frame, app, chunks[0]);
+    render_config_filter(frame, app, chunks[1]);
+    render_config_category_list(frame, app, chunks[2]);
+}
+
+fn render_enabled_category_summary(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
+    let mut spans = vec![Span::styled(
+        "Shown ",
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    )];
+
+    for index in app.enabled_category_indices() {
+        if let Some(category) = app.categories.get(index) {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                format!(" {} ", category.name),
+                Style::default().fg(Color::Black).bg(Color::Cyan),
+            ));
+        }
+    }
+
+    if app.enabled_category_count() == 0 {
+        spans.push(Span::styled(" none", Style::default().fg(Color::DarkGray)));
+    }
+
+    let paragraph = Paragraph::new(Line::from(spans))
+        .block(Block::default().borders(Borders::BOTTOM))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, area);
+}
+
+fn render_config_filter(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
+    let style = if app.config_filter_active {
+        Style::default().fg(Color::Cyan)
+    } else if app.has_config_filter() {
+        Style::default().fg(Color::White)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let value = if app.has_config_filter() {
+        app.config_filter.as_str()
+    } else {
+        "type / to search"
+    };
+
+    let paragraph = Paragraph::new(Line::from(vec![
+        Span::styled("Search ", Style::default().fg(Color::White)),
+        Span::styled(value.to_owned(), style),
+    ]))
+    .block(Block::default().borders(Borders::BOTTOM));
+    frame.render_widget(paragraph, area);
+}
+
+fn render_config_category_list(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
+    let indices = app.filtered_config_category_indices();
+    let items = if indices.is_empty() {
+        vec![ListItem::new("No matching categories.")]
+    } else {
+        indices
+            .iter()
+            .filter_map(|index| {
+                app.categories.get(*index).map(|category| {
+                    let selected = *index == app.config_selected_category;
+                    let enabled = app.is_category_enabled(*index);
+                    let style = if selected {
+                        Style::default().fg(Color::Black).bg(Color::Cyan)
+                    } else if enabled {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        Style::default()
+                    };
+                    let marker = if selected { ">" } else { " " };
+                    let checkbox = if enabled { "[x]" } else { "[ ]" };
+
+                    ListItem::new(Line::from(vec![
+                        Span::raw(marker),
+                        Span::raw(" "),
+                        Span::raw(checkbox),
+                        Span::raw(" "),
+                        Span::raw(category.name.clone()),
+                    ]))
+                    .style(style)
+                })
+            })
+            .collect()
+    };
+
+    let title = format!(
+        "Available Categories ({}/{})",
+        app.enabled_category_count(),
+        app.categories.len()
+    );
+    let mut list_state = ListState::default();
+    list_state.select(
+        indices
+            .iter()
+            .position(|index| *index == app.config_selected_category),
+    );
+
+    frame.render_stateful_widget(
+        List::new(items).block(focused_block(title, true)),
+        area,
+        &mut list_state,
+    );
+}
+
 fn render_status(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
-    let focus = if app.detail_open {
+    let focus = if app.config_open {
+        "Config"
+    } else if app.detail_open {
         "Article"
     } else {
         match app.focus {
@@ -176,7 +380,11 @@ fn render_status(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
             Focus::Articles => "Articles",
         }
     };
-    let help = if app.detail_open {
+    let help = if app.config_open && app.config_filter_active {
+        "Type to search, Space toggles, Enter/Esc accepts"
+    } else if app.config_open {
+        "Space toggles, / searches, d resets defaults, Enter/Esc closes"
+    } else if app.detail_open {
         "Esc/Enter returns to list, j/k scroll, q quit"
     } else if app.category_filter_active {
         "Type to filter, Enter/Esc accept, Backspace edits"
@@ -246,6 +454,28 @@ fn focused_block(title: impl Into<String>, focused: bool) -> Block<'static> {
         .borders(Borders::ALL)
         .border_style(style)
         .title(title.into())
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let vertical_margin = (100 - percent_y) / 2;
+    let horizontal_margin = (100 - percent_x) / 2;
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(vertical_margin),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage(vertical_margin),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(horizontal_margin),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage(horizontal_margin),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 fn format_short_date(date: OffsetDateTime) -> String {

@@ -16,6 +16,17 @@ use crate::{
 };
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const DEFAULT_ENABLED_CATEGORY_KEYS: &[&str] = &[
+    "world",
+    "gaming",
+    "science",
+    "ai",
+    "technology",
+    "business",
+    "sports",
+    "todayinhistory",
+    "usa",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
@@ -35,6 +46,7 @@ impl Focus {
 #[derive(Debug)]
 pub struct AppState {
     pub categories: Vec<Category>,
+    pub enabled_categories: Vec<bool>,
     pub selected_category: usize,
     pub loaded_category: Option<usize>,
     pub articles: Vec<Article>,
@@ -44,6 +56,10 @@ pub struct AppState {
     pub error: Option<String>,
     pub category_filter: String,
     pub category_filter_active: bool,
+    pub config_open: bool,
+    pub config_selected_category: usize,
+    pub config_filter: String,
+    pub config_filter_active: bool,
     pub detail_open: bool,
     pub detail_scroll: u16,
     should_quit: bool,
@@ -54,9 +70,11 @@ impl AppState {
         let categories = client.categories().await?;
         let selected_category = find_category(&categories, initial_category)
             .ok_or_else(|| KiteError::CategoryNotFound(initial_category.to_owned()))?;
+        let enabled_categories = default_enabled_categories(&categories, selected_category);
 
         let mut state = Self {
             categories,
+            enabled_categories,
             selected_category,
             loaded_category: None,
             articles: Vec::new(),
@@ -66,6 +84,10 @@ impl AppState {
             error: None,
             category_filter: String::new(),
             category_filter_active: false,
+            config_open: false,
+            config_selected_category: selected_category,
+            config_filter: String::new(),
+            config_filter_active: false,
             detail_open: false,
             detail_scroll: 0,
             should_quit: false,
@@ -125,21 +147,61 @@ impl AppState {
         self.categories
             .iter()
             .enumerate()
-            .filter_map(|(index, category)| self.category_matches_filter(category).then_some(index))
+            .filter_map(|(index, category)| {
+                (self.is_category_enabled(index) && self.category_matches_filter(category))
+                    .then_some(index)
+            })
+            .collect()
+    }
+
+    pub fn is_category_enabled(&self, index: usize) -> bool {
+        self.enabled_categories.get(index).copied().unwrap_or(false)
+    }
+
+    pub fn enabled_category_count(&self) -> usize {
+        self.enabled_categories
+            .iter()
+            .filter(|enabled| **enabled)
+            .count()
+    }
+
+    pub fn hidden_category_count(&self) -> usize {
+        self.categories
+            .len()
+            .saturating_sub(self.enabled_category_count())
+    }
+
+    pub fn enabled_category_indices(&self) -> Vec<usize> {
+        self.enabled_categories
+            .iter()
+            .enumerate()
+            .filter_map(|(index, enabled)| enabled.then_some(index))
+            .collect()
+    }
+
+    pub fn has_config_filter(&self) -> bool {
+        !self.config_filter.trim().is_empty()
+    }
+
+    pub fn filtered_config_category_indices(&self) -> Vec<usize> {
+        self.categories
+            .iter()
+            .enumerate()
+            .filter_map(|(index, category)| {
+                category_matches_filter(category, &self.config_filter).then_some(index)
+            })
             .collect()
     }
 
     fn category_matches_filter(&self, category: &Category) -> bool {
-        let filter = self.category_filter.trim().to_ascii_lowercase();
-        filter.is_empty()
-            || category.name.to_ascii_lowercase().contains(&filter)
-            || category.file.to_ascii_lowercase().contains(&filter)
-            || category.file_stem().to_ascii_lowercase().contains(&filter)
+        category_matches_filter(category, &self.category_filter)
     }
 
     fn selected_category_matches_filter(&self) -> bool {
-        self.selected_category()
-            .is_some_and(|category| self.category_matches_filter(category))
+        self.is_category_enabled(self.selected_category)
+            && self
+                .selected_category()
+                .is_some_and(|category| self.category_matches_filter(category))
     }
 
     fn start_category_filter(&mut self) {
@@ -211,6 +273,162 @@ impl AppState {
             1 => format!("1 category matches /{filter}"),
             _ => format!("{matches} categories match /{filter}"),
         };
+    }
+
+    fn open_category_config(&mut self) {
+        self.config_open = true;
+        self.config_selected_category = self.selected_category;
+        self.config_filter_active = false;
+        self.category_filter_active = false;
+        self.detail_open = false;
+        self.detail_scroll = 0;
+        self.error = None;
+        self.sync_config_selected_category_to_filter();
+        self.update_category_config_status();
+    }
+
+    fn close_category_config(&mut self) {
+        self.config_open = false;
+        self.config_filter_active = false;
+        self.status = format!(
+            "{} categories shown, {} hidden",
+            self.enabled_category_count(),
+            self.hidden_category_count()
+        );
+        self.sync_selected_category_to_filter();
+    }
+
+    fn start_config_filter(&mut self) {
+        self.config_filter_active = true;
+        self.error = None;
+        self.sync_config_selected_category_to_filter();
+        self.update_category_config_status();
+    }
+
+    fn finish_config_filter(&mut self) {
+        self.config_filter_active = false;
+        self.update_category_config_status();
+    }
+
+    fn clear_config_filter(&mut self) {
+        self.config_filter.clear();
+        self.config_filter_active = false;
+        self.sync_config_selected_category_to_filter();
+        self.update_category_config_status();
+    }
+
+    fn push_config_filter(&mut self, ch: char) {
+        if ch.is_control() {
+            return;
+        }
+
+        self.config_filter.push(ch);
+        self.sync_config_selected_category_to_filter();
+        self.update_category_config_status();
+    }
+
+    fn pop_config_filter(&mut self) {
+        self.config_filter.pop();
+        self.sync_config_selected_category_to_filter();
+        self.update_category_config_status();
+    }
+
+    fn clear_config_filter_input(&mut self) {
+        self.config_filter.clear();
+        self.sync_config_selected_category_to_filter();
+        self.update_category_config_status();
+    }
+
+    fn sync_config_selected_category_to_filter(&mut self) {
+        if self
+            .categories
+            .get(self.config_selected_category)
+            .is_some_and(|category| category_matches_filter(category, &self.config_filter))
+        {
+            return;
+        }
+
+        if let Some(index) = self.filtered_config_category_indices().first().copied() {
+            self.config_selected_category = index;
+        }
+    }
+
+    fn update_category_config_status(&mut self) {
+        let shown = self.enabled_category_count();
+        let hidden = self.hidden_category_count();
+        let filter = self.config_filter.trim();
+
+        self.status = if filter.is_empty() {
+            format!("{shown} categories shown, {hidden} hidden")
+        } else {
+            let matches = self.filtered_config_category_indices().len();
+            format!("{shown} shown, {hidden} hidden, {matches} match /{filter}")
+        };
+    }
+
+    fn move_config_category_by(&mut self, step: isize, wrap: bool) {
+        let indices = self.filtered_config_category_indices();
+        if indices.is_empty() {
+            self.update_category_config_status();
+            return;
+        }
+
+        let current = indices
+            .iter()
+            .position(|index| *index == self.config_selected_category)
+            .unwrap_or(0) as isize;
+        let last = indices.len() as isize - 1;
+        let next = if wrap {
+            (current + step).rem_euclid(indices.len() as isize)
+        } else {
+            (current + step).clamp(0, last)
+        };
+
+        self.config_selected_category = indices[next as usize];
+        self.status = self
+            .categories
+            .get(self.config_selected_category)
+            .map(|category| format!("Selected {}", category.name))
+            .unwrap_or_default();
+    }
+
+    fn toggle_config_category(&mut self) {
+        let Some(category_name) = self
+            .categories
+            .get(self.config_selected_category)
+            .map(|category| category.name.clone())
+        else {
+            return;
+        };
+        let enabled_count = self.enabled_category_count();
+
+        let Some(enabled) = self
+            .enabled_categories
+            .get_mut(self.config_selected_category)
+        else {
+            return;
+        };
+
+        if *enabled && enabled_count == 1 {
+            self.status = "At least one category must stay shown".to_owned();
+            return;
+        }
+
+        *enabled = !*enabled;
+        self.status = if *enabled {
+            format!("Showing {category_name}")
+        } else {
+            format!("Hiding {category_name}")
+        };
+        self.sync_selected_category_to_filter();
+    }
+
+    fn reset_default_category_config(&mut self) {
+        self.enabled_categories =
+            default_enabled_categories(&self.categories, self.selected_category);
+        self.sync_selected_category_to_filter();
+        self.sync_config_selected_category_to_filter();
+        self.update_category_config_status();
     }
 
     fn move_category_by(&mut self, step: isize, wrap: bool) {
@@ -378,6 +596,11 @@ async fn run_event_loop(
 }
 
 async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
+    if state.config_open {
+        handle_category_config_key(state, key);
+        return;
+    }
+
     if state.category_filter_active {
         handle_category_filter_key(state, key);
         return;
@@ -399,6 +622,7 @@ async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
 
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
+        KeyCode::Char('c') => state.open_category_config(),
         KeyCode::Char('/') => state.start_category_filter(),
         KeyCode::Char('q') => state.quit(),
         KeyCode::Esc if state.has_category_filter() => state.clear_category_filter(),
@@ -419,6 +643,43 @@ async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
             state.load_selected_category(client).await
         }
         KeyCode::Char('r') => state.update_category_filter_status(),
+        _ => {}
+    }
+}
+
+fn handle_category_config_key(state: &mut AppState, key: KeyEvent) {
+    if state.config_filter_active {
+        match key.code {
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                state.clear_config_filter_input();
+            }
+            KeyCode::Esc | KeyCode::Enter => state.finish_config_filter(),
+            KeyCode::Backspace => state.pop_config_filter(),
+            KeyCode::Down => state.move_config_category_by(1, true),
+            KeyCode::Up => state.move_config_category_by(-1, true),
+            KeyCode::PageDown => state.move_config_category_by(10, false),
+            KeyCode::PageUp => state.move_config_category_by(-10, false),
+            KeyCode::Char(' ') => state.toggle_config_category(),
+            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                state.push_config_filter(ch);
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
+        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => state.close_category_config(),
+        KeyCode::Char('/') => state.start_config_filter(),
+        KeyCode::Backspace if state.has_config_filter() => state.clear_config_filter(),
+        KeyCode::Down | KeyCode::Char('j') => state.move_config_category_by(1, true),
+        KeyCode::Up | KeyCode::Char('k') => state.move_config_category_by(-1, true),
+        KeyCode::PageDown => state.move_config_category_by(10, false),
+        KeyCode::PageUp => state.move_config_category_by(-10, false),
+        KeyCode::Char(' ') => state.toggle_config_category(),
+        KeyCode::Char('d') => state.reset_default_category_config(),
         _ => {}
     }
 }
@@ -452,6 +713,46 @@ fn find_category(categories: &[Category], requested: &str) -> Option<usize> {
     })
 }
 
+fn default_enabled_categories(categories: &[Category], selected_category: usize) -> Vec<bool> {
+    categories
+        .iter()
+        .enumerate()
+        .map(|(index, category)| {
+            index == selected_category
+                || DEFAULT_ENABLED_CATEGORY_KEYS
+                    .iter()
+                    .any(|default| category_matches_default_key(category, default))
+        })
+        .collect()
+}
+
+fn category_matches_default_key(category: &Category, key: &str) -> bool {
+    let key = normalize_category_key(key);
+    [
+        category.name.as_str(),
+        category.file.as_str(),
+        category.file_stem(),
+    ]
+    .into_iter()
+    .any(|value| normalize_category_key(value) == key)
+}
+
+fn normalize_category_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .map(|character| character.to_ascii_lowercase())
+        .collect()
+}
+
+fn category_matches_filter(category: &Category, filter: &str) -> bool {
+    let filter = filter.trim().to_ascii_lowercase();
+    filter.is_empty()
+        || category.name.to_ascii_lowercase().contains(&filter)
+        || category.file.to_ascii_lowercase().contains(&filter)
+        || category.file_stem().to_ascii_lowercase().contains(&filter)
+}
+
 struct TerminalRestore;
 
 impl Drop for TerminalRestore {
@@ -482,6 +783,41 @@ mod tests {
 
     use url::Url;
 
+    fn category(name: &str, file: &str) -> Category {
+        Category {
+            name: name.to_owned(),
+            file: file.to_owned(),
+            feed_url: Url::parse(&format!(
+                "https://news.kagi.com/{}.xml",
+                file.strip_suffix(".json").unwrap()
+            ))
+            .unwrap(),
+        }
+    }
+
+    fn state_with_categories(categories: Vec<Category>) -> AppState {
+        AppState {
+            enabled_categories: vec![true; categories.len()],
+            categories,
+            selected_category: 0,
+            loaded_category: Some(0),
+            articles: Vec::new(),
+            selected_article: 0,
+            focus: Focus::Categories,
+            status: String::new(),
+            error: None,
+            category_filter: String::new(),
+            category_filter_active: false,
+            config_open: false,
+            config_selected_category: 0,
+            config_filter: String::new(),
+            config_filter_active: false,
+            detail_open: false,
+            detail_scroll: 0,
+            should_quit: false,
+        }
+    }
+
     #[test]
     fn finds_category_by_name_file_or_stem() {
         let categories = categories();
@@ -494,21 +830,7 @@ mod tests {
 
     #[test]
     fn focus_cycles_between_categories_and_articles() {
-        let mut state = AppState {
-            categories: categories(),
-            selected_category: 0,
-            loaded_category: Some(0),
-            articles: Vec::new(),
-            selected_article: 0,
-            focus: Focus::Categories,
-            status: String::new(),
-            error: None,
-            category_filter: String::new(),
-            category_filter_active: false,
-            detail_open: false,
-            detail_scroll: 0,
-            should_quit: false,
-        };
+        let mut state = state_with_categories(categories());
 
         state.next_focus();
         assert_eq!(state.focus, Focus::Articles);
@@ -519,21 +841,7 @@ mod tests {
 
     #[test]
     fn category_filter_matches_name_file_or_stem() {
-        let mut state = AppState {
-            categories: categories(),
-            selected_category: 0,
-            loaded_category: Some(0),
-            articles: Vec::new(),
-            selected_article: 0,
-            focus: Focus::Categories,
-            status: String::new(),
-            error: None,
-            category_filter: String::new(),
-            category_filter_active: false,
-            detail_open: false,
-            detail_scroll: 0,
-            should_quit: false,
-        };
+        let mut state = state_with_categories(categories());
 
         state.category_filter = "tech".to_owned();
         assert_eq!(state.filtered_category_indices(), vec![1]);
@@ -544,37 +852,13 @@ mod tests {
 
     #[test]
     fn category_navigation_uses_filtered_matches() {
-        let mut state = AppState {
-            categories: vec![
-                Category {
-                    name: "World".to_owned(),
-                    file: "world.json".to_owned(),
-                    feed_url: Url::parse("https://news.kagi.com/world.xml").unwrap(),
-                },
-                Category {
-                    name: "Technology".to_owned(),
-                    file: "tech.json".to_owned(),
-                    feed_url: Url::parse("https://news.kagi.com/tech.xml").unwrap(),
-                },
-                Category {
-                    name: "Top Stories".to_owned(),
-                    file: "top.json".to_owned(),
-                    feed_url: Url::parse("https://news.kagi.com/top.xml").unwrap(),
-                },
-            ],
-            selected_category: 0,
-            loaded_category: Some(0),
-            articles: Vec::new(),
-            selected_article: 0,
-            focus: Focus::Categories,
-            status: String::new(),
-            error: None,
-            category_filter: "t".to_owned(),
-            category_filter_active: false,
-            detail_open: false,
-            detail_scroll: 0,
-            should_quit: false,
-        };
+        let mut state = state_with_categories(vec![
+            category("World", "world.json"),
+            category("Technology", "tech.json"),
+            category("Top Stories", "top.json"),
+        ]);
+        state.enabled_categories = vec![false, true, true];
+        state.category_filter = "t".to_owned();
 
         state.sync_selected_category_to_filter();
         assert_eq!(state.selected_category, 1);
@@ -584,5 +868,65 @@ mod tests {
 
         state.move_next();
         assert_eq!(state.selected_category, 1);
+    }
+
+    #[test]
+    fn default_category_config_matches_web_defaults() {
+        let categories = vec![
+            category("World", "world.json"),
+            category("Gaming", "gaming.json"),
+            category("Science", "science.json"),
+            category("AI", "ai.json"),
+            category("Technology", "technology.json"),
+            category("Business", "business.json"),
+            category("Sports", "sports.json"),
+            category("Today in History", "today_in_history.json"),
+            category("USA", "usa.json"),
+            category("Climate Change", "climate_change.json"),
+        ];
+
+        let enabled = default_enabled_categories(&categories, 0);
+        let enabled_names = categories
+            .iter()
+            .zip(enabled)
+            .filter_map(|(category, enabled)| enabled.then_some(category.name.as_str()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            enabled_names,
+            vec![
+                "World",
+                "Gaming",
+                "Science",
+                "AI",
+                "Technology",
+                "Business",
+                "Sports",
+                "Today in History",
+                "USA"
+            ]
+        );
+    }
+
+    #[test]
+    fn initial_category_outside_defaults_is_enabled() {
+        let categories = vec![
+            category("World", "world.json"),
+            category("Climate Change", "climate_change.json"),
+        ];
+
+        let enabled = default_enabled_categories(&categories, 1);
+
+        assert_eq!(enabled, vec![true, true]);
+    }
+
+    #[test]
+    fn category_config_keeps_one_category_enabled() {
+        let mut state = state_with_categories(vec![category("World", "world.json")]);
+
+        state.toggle_config_category();
+
+        assert!(state.is_category_enabled(0));
+        assert_eq!(state.status, "At least one category must stay shown");
     }
 }

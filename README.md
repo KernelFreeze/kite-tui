@@ -23,8 +23,10 @@ cargo run -- --base-url https://news.kagi.com/
 - `Tab`: switch panes
 - `j` / `k` or arrow keys: move selection
 - `/`: filter categories
+- `c`: configure which categories are shown
 - `Enter`: load the selected category, open an article, or return to the article list
 - `Esc`: return from an article, accept an active category filter, or clear an existing category filter
+- `Space`: toggle a category in the category configuration popup
 - `Backspace`: edit an active category filter
 - `r`: refresh the selected category
 - `q`: quit
