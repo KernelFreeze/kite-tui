@@ -789,6 +789,12 @@ fn select_initial_category(
         return Ok(selected_category);
     }
 
+    if let Some(world) = find_category(categories, "World")
+        && enabled_categories.get(world).copied().unwrap_or(false)
+    {
+        return Ok(world);
+    }
+
     Ok(enabled_categories
         .iter()
         .position(|enabled| *enabled)
@@ -1001,6 +1007,32 @@ mod tests {
 
         assert_eq!(selected_category, 1);
         assert_eq!(enabled, vec![true, true]);
+    }
+
+    #[test]
+    fn default_initial_category_prefers_world_when_visible() {
+        let categories = vec![
+            category("Technology", "technology.json"),
+            category("World", "world.json"),
+        ];
+        let mut enabled = default_enabled_categories(&categories);
+
+        let selected_category = select_initial_category(&categories, &mut enabled, None).unwrap();
+
+        assert_eq!(selected_category, 1);
+    }
+
+    #[test]
+    fn default_initial_category_uses_first_enabled_when_world_is_hidden() {
+        let categories = vec![
+            category("Technology", "technology.json"),
+            category("World", "world.json"),
+        ];
+        let mut enabled = vec![true, false];
+
+        let selected_category = select_initial_category(&categories, &mut enabled, None).unwrap();
+
+        assert_eq!(selected_category, 0);
     }
 
     #[test]
