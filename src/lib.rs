@@ -3,6 +3,7 @@ pub mod args;
 pub mod error;
 pub mod kagi;
 pub mod models;
+pub mod read_state;
 pub mod settings;
 pub mod ui;
 

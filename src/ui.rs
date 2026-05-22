@@ -201,7 +201,9 @@ fn render_articles(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
             .iter()
             .enumerate()
             .map(|(index, article)| {
-                let style = if index == app.selected_article {
+                let selected = index == app.selected_article;
+                let read = app.is_article_read(article);
+                let style = if selected {
                     Style::default().fg(Color::Black).bg(Color::Green)
                 } else {
                     Style::default()
@@ -212,15 +214,11 @@ fn render_articles(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
                     .unwrap_or_else(|| "unknown".to_owned());
 
                 ListItem::new(Line::from(vec![
-                    Span::raw(if index == app.selected_article {
-                        ">"
-                    } else {
-                        " "
-                    }),
+                    Span::raw(if selected { ">" } else { " " }),
                     Span::raw(" "),
                     Span::styled(date, Style::default().fg(Color::Yellow)),
                     Span::raw(" "),
-                    Span::raw(article.title.clone()),
+                    Span::styled(article.title.clone(), article_title_style(selected, read)),
                 ]))
                 .style(style)
             })
@@ -231,6 +229,14 @@ fn render_articles(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     let mut list_state = ListState::default();
     list_state.select((!app.articles.is_empty()).then_some(app.selected_article));
     frame.render_stateful_widget(List::new(items).block(block), area, &mut list_state);
+}
+
+fn article_title_style(selected: bool, read: bool) -> Style {
+    match (selected, read) {
+        (_, true) => Style::default().fg(Color::DarkGray),
+        (true, false) => Style::default().fg(Color::Black),
+        (false, false) => Style::default().fg(Color::White),
+    }
 }
 
 fn render_article_detail(frame: &mut Frame<'_>, app: &AppState, area: Rect) {

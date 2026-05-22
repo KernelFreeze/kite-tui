@@ -12,6 +12,7 @@ use crate::{
     error::{KiteError, Result},
     kagi::KagiClient,
     models::{Article, Category, SummaryBlock},
+    read_state::ReadArticles,
     settings::{self, CategorySettings, KeyBindingSettings, Settings},
     ui,
 };
@@ -306,6 +307,7 @@ pub struct AppState {
     pub selected_category: usize,
     pub loaded_category: Option<usize>,
     pub articles: Vec<Article>,
+    pub read_articles: ReadArticles,
     pub selected_article: usize,
     pub focus: Focus,
     pub status: String,
@@ -331,6 +333,7 @@ impl AppState {
     pub async fn bootstrap(client: &KagiClient, initial_category: Option<&str>) -> Result<Self> {
         let categories = client.categories().await?;
         let (settings, settings_error) = load_settings();
+        let (read_articles, read_articles_error) = load_read_articles();
         let mut enabled_categories = enabled_categories_from_settings(&categories, &settings)
             .unwrap_or_else(|| default_enabled_categories(&categories));
         let keybinds = KeyBindings::from_settings(&settings.keybinds);
@@ -344,6 +347,7 @@ impl AppState {
             selected_category,
             loaded_category: None,
             articles: Vec::new(),
+            read_articles,
             selected_article: 0,
             focus: Focus::Articles,
             status: "Loading articles".to_owned(),
@@ -367,7 +371,7 @@ impl AppState {
 
         state.load_selected_category(client).await;
         if state.error.is_none() {
-            state.error = settings_error;
+            state.error = startup_error(settings_error, read_articles_error);
         }
         Ok(state)
     }
@@ -412,6 +416,10 @@ impl AppState {
 
     pub fn selected_article(&self) -> Option<&Article> {
         self.articles.get(self.selected_article)
+    }
+
+    pub fn is_article_read(&self, article: &Article) -> bool {
+        self.read_articles.is_read(article)
     }
 
     pub fn has_category_filter(&self) -> bool {
@@ -1035,10 +1043,15 @@ impl AppState {
     }
 
     fn open_detail(&mut self) {
-        if !self.articles.is_empty() {
-            self.pending_key_sequence.clear();
-            self.detail_open = true;
-            self.detail_scroll = 0;
+        let Some(article_id) = self.selected_article().map(|article| article.id) else {
+            return;
+        };
+
+        self.pending_key_sequence.clear();
+        self.detail_open = true;
+        self.detail_scroll = 0;
+        if let Err(error) = self.read_articles.mark_read_id(article_id) {
+            self.error = Some(error.to_string());
         }
     }
 
@@ -1428,6 +1441,25 @@ fn load_settings() -> (Settings, Option<String>) {
     }
 }
 
+fn load_read_articles() -> (ReadArticles, Option<String>) {
+    match ReadArticles::load() {
+        Ok(read_articles) => (read_articles, None),
+        Err(error) => (ReadArticles::empty_for_today(), Some(error.to_string())),
+    }
+}
+
+fn startup_error(
+    settings_error: Option<String>,
+    read_articles_error: Option<String>,
+) -> Option<String> {
+    let errors = [settings_error, read_articles_error]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+    (!errors.is_empty()).then(|| errors.join("; "))
+}
+
 fn enabled_categories_from_settings(
     categories: &[Category],
     settings: &Settings,
@@ -1567,6 +1599,7 @@ mod tests {
             selected_category: 0,
             loaded_category: Some(0),
             articles: Vec::new(),
+            read_articles: ReadArticles::empty_for_today(),
             selected_article: 0,
             focus: Focus::Categories,
             status: String::new(),
@@ -1790,6 +1823,22 @@ mod tests {
                 keybinds: KeyBindingSettings::default(),
             }
         );
+    }
+
+    #[test]
+    fn opening_article_marks_it_read() {
+        let mut state = state_with_categories(categories());
+        let article = article("One");
+        let article_id = article.id;
+        state.focus = Focus::Articles;
+        state.articles = vec![article];
+
+        assert!(!state.is_article_read(&state.articles[0]));
+        state.open_detail();
+
+        assert!(state.detail_open);
+        assert!(state.is_article_read(&state.articles[0]));
+        assert_eq!(state.articles[0].id, article_id);
     }
 
     #[test]
