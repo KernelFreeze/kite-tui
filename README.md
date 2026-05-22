@@ -52,6 +52,12 @@ jump_top = "gg"
 jump_bottom = "G"
 ```
 
+## Read Articles
+
+Kite stores read article IDs in the platform data directory reported by the
+`directories` crate. The read list is scoped to the current UTC day; stale
+entries are cleared when Kite starts or when a new article is marked read.
+
 ## RSS Parser
 
 Kite uses `feed-rs` instead of a narrower RSS-only parser. Kagi currently
