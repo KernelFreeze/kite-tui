@@ -42,6 +42,12 @@ pub struct KeyBindingSettings {
     #[serde(default = "default_category_filter_key")]
     pub category_filter: String,
 
+    #[serde(default = "default_next_category_key")]
+    pub next_category: String,
+
+    #[serde(default = "default_previous_category_key")]
+    pub previous_category: String,
+
     #[serde(default = "default_refresh_key")]
     pub refresh: String,
 
@@ -64,6 +70,8 @@ impl Default for KeyBindingSettings {
             help: default_help_key(),
             settings: default_settings_key(),
             category_filter: default_category_filter_key(),
+            next_category: default_next_category_key(),
+            previous_category: default_previous_category_key(),
             refresh: default_refresh_key(),
             quit: default_quit_key(),
             reset_defaults: default_reset_defaults_key(),
@@ -178,6 +186,14 @@ fn default_category_filter_key() -> String {
     "/".to_owned()
 }
 
+fn default_next_category_key() -> String {
+    "tab".to_owned()
+}
+
+fn default_previous_category_key() -> String {
+    "shift+tab".to_owned()
+}
+
 fn default_refresh_key() -> String {
     "r".to_owned()
 }
@@ -259,6 +275,8 @@ mod tests {
                 help: "?".to_owned(),
                 settings: ",".to_owned(),
                 category_filter: "/".to_owned(),
+                next_category: "tab".to_owned(),
+                previous_category: "shift+tab".to_owned(),
                 refresh: "r".to_owned(),
                 quit: "q".to_owned(),
                 reset_defaults: "d".to_owned(),

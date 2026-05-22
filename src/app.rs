@@ -18,6 +18,8 @@ use crate::{
 };
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const KEY_TAB: &str = "tab";
+const KEY_SHIFT_TAB: &str = "shift+tab";
 const DEFAULT_ENABLED_CATEGORY_KEYS: &[&str] = &[
     "world",
     "gaming",
@@ -34,15 +36,6 @@ const DEFAULT_ENABLED_CATEGORY_KEYS: &[&str] = &[
 pub enum Focus {
     Categories,
     Articles,
-}
-
-impl Focus {
-    fn next(self) -> Self {
-        match self {
-            Self::Categories => Self::Articles,
-            Self::Articles => Self::Categories,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +72,8 @@ pub enum KeyBindingAction {
     Help,
     Settings,
     CategoryFilter,
+    NextCategory,
+    PreviousCategory,
     Refresh,
     Quit,
     ResetDefaults,
@@ -87,10 +82,12 @@ pub enum KeyBindingAction {
 }
 
 impl KeyBindingAction {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Help,
         Self::Settings,
         Self::CategoryFilter,
+        Self::NextCategory,
+        Self::PreviousCategory,
         Self::Refresh,
         Self::Quit,
         Self::ResetDefaults,
@@ -103,6 +100,8 @@ impl KeyBindingAction {
             Self::Help => "Help",
             Self::Settings => "Settings",
             Self::CategoryFilter => "Category filter",
+            Self::NextCategory => "Next category",
+            Self::PreviousCategory => "Previous category",
             Self::Refresh => "Refresh",
             Self::Quit => "Quit",
             Self::ResetDefaults => "Restore defaults",
@@ -116,6 +115,8 @@ impl KeyBindingAction {
             Self::Help => "Open help",
             Self::Settings => "Open settings",
             Self::CategoryFilter => "Filter categories",
+            Self::NextCategory => "Load next category",
+            Self::PreviousCategory => "Load previous category",
             Self::Refresh => "Refresh selected category",
             Self::Quit => "Quit or close popup",
             Self::ResetDefaults => "Restore defaults in settings",
@@ -134,6 +135,8 @@ pub struct KeyBindings {
     pub help: String,
     pub settings: String,
     pub category_filter: String,
+    pub next_category: String,
+    pub previous_category: String,
     pub refresh: String,
     pub quit: String,
     pub reset_defaults: String,
@@ -147,6 +150,8 @@ impl Default for KeyBindings {
             help: "?".to_owned(),
             settings: ",".to_owned(),
             category_filter: "/".to_owned(),
+            next_category: KEY_TAB.to_owned(),
+            previous_category: KEY_SHIFT_TAB.to_owned(),
             refresh: "r".to_owned(),
             quit: "q".to_owned(),
             reset_defaults: "d".to_owned(),
@@ -166,6 +171,16 @@ impl KeyBindings {
             category_filter: configured_key_sequence(
                 &settings.category_filter,
                 &defaults.category_filter,
+                false,
+            ),
+            next_category: configured_key_sequence(
+                &settings.next_category,
+                &defaults.next_category,
+                false,
+            ),
+            previous_category: configured_key_sequence(
+                &settings.previous_category,
+                &defaults.previous_category,
                 false,
             ),
             refresh: configured_key_sequence(&settings.refresh, &defaults.refresh, false),
@@ -189,6 +204,8 @@ impl KeyBindings {
             help: self.help.clone(),
             settings: self.settings.clone(),
             category_filter: self.category_filter.clone(),
+            next_category: self.next_category.clone(),
+            previous_category: self.previous_category.clone(),
             refresh: self.refresh.clone(),
             quit: self.quit.clone(),
             reset_defaults: self.reset_defaults.clone(),
@@ -207,6 +224,14 @@ impl KeyBindings {
 
     pub fn category_filter_label(&self) -> String {
         key_sequence_label(&self.category_filter)
+    }
+
+    pub fn next_category_label(&self) -> String {
+        key_sequence_label(&self.next_category)
+    }
+
+    pub fn previous_category_label(&self) -> String {
+        key_sequence_label(&self.previous_category)
     }
 
     pub fn refresh_label(&self) -> String {
@@ -230,6 +255,8 @@ impl KeyBindings {
             KeyBindingAction::Help => &self.help,
             KeyBindingAction::Settings => &self.settings,
             KeyBindingAction::CategoryFilter => &self.category_filter,
+            KeyBindingAction::NextCategory => &self.next_category,
+            KeyBindingAction::PreviousCategory => &self.previous_category,
             KeyBindingAction::Refresh => &self.refresh,
             KeyBindingAction::Quit => &self.quit,
             KeyBindingAction::ResetDefaults => &self.reset_defaults,
@@ -243,6 +270,8 @@ impl KeyBindings {
             KeyBindingAction::Help => self.help = sequence,
             KeyBindingAction::Settings => self.settings = sequence,
             KeyBindingAction::CategoryFilter => self.category_filter = sequence,
+            KeyBindingAction::NextCategory => self.next_category = sequence,
+            KeyBindingAction::PreviousCategory => self.previous_category = sequence,
             KeyBindingAction::Refresh => self.refresh = sequence,
             KeyBindingAction::Quit => self.quit = sequence,
             KeyBindingAction::ResetDefaults => self.reset_defaults = sequence,
@@ -284,6 +313,14 @@ impl KeyBindings {
 
     fn matches_category_filter(&self, key: KeyEvent) -> bool {
         key_matches_sequence(key, &self.category_filter)
+    }
+
+    fn matches_next_category(&self, key: KeyEvent) -> bool {
+        key_matches_sequence(key, &self.next_category)
+    }
+
+    fn matches_previous_category(&self, key: KeyEvent) -> bool {
+        key_matches_sequence(key, &self.previous_category)
     }
 
     fn matches_refresh(&self, key: KeyEvent) -> bool {
@@ -805,16 +842,28 @@ impl AppState {
 
     fn push_keybind_input(&mut self, ch: char) {
         if !valid_key_sequence_char(ch) {
-            self.status = "Keybinds must use printable keys".to_owned();
+            self.status = "Keybinds must use printable keys, Tab, or Shift+Tab".to_owned();
             return;
         }
 
+        if is_named_key_binding(&self.keybind_input) {
+            self.keybind_input.clear();
+        }
         self.keybind_input.push(ch);
         self.update_keybind_settings_status();
     }
 
+    fn set_keybind_input(&mut self, sequence: &str) {
+        self.keybind_input = sequence.to_owned();
+        self.update_keybind_settings_status();
+    }
+
     fn pop_keybind_input(&mut self) {
-        self.keybind_input.pop();
+        if is_named_key_binding(&self.keybind_input) {
+            self.keybind_input.clear();
+        } else {
+            self.keybind_input.pop();
+        }
         self.update_keybind_settings_status();
     }
 
@@ -824,12 +873,12 @@ impl AppState {
     }
 
     fn finish_keybind_edit(&mut self, action: KeyBindingAction) {
-        let sequence = self.keybind_input.clone();
-        if !valid_key_sequence(&sequence) {
-            self.status = "Keybinds must not be empty".to_owned();
+        let sequence = normalize_key_sequence(&self.keybind_input);
+        if action.supports_sequences() && !valid_key_sequence(&sequence) {
+            self.status = "Key sequences must use printable keys".to_owned();
             return;
         }
-        if !action.supports_sequences() && sequence.chars().count() != 1 {
+        if !action.supports_sequences() && !valid_single_key_binding(&sequence) {
             self.status = format!("{} requires a single key", action.label());
             return;
         }
@@ -1034,12 +1083,23 @@ impl AppState {
         lines
     }
 
-    fn next_focus(&mut self) {
+    fn select_next_category(&mut self) -> bool {
+        self.select_category_by(1)
+    }
+
+    fn select_previous_category(&mut self) -> bool {
+        self.select_category_by(-1)
+    }
+
+    fn select_category_by(&mut self, step: isize) -> bool {
         if self.detail_open {
-            return;
+            return false;
         }
 
-        self.focus = self.focus.next();
+        self.move_category_by(step, true);
+        self.focus = Focus::Articles;
+        self.selected_category_matches_filter()
+            && self.loaded_category != Some(self.selected_category)
     }
 
     fn open_detail(&mut self) {
@@ -1159,11 +1219,20 @@ async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
         return;
     }
 
+    if state.keybinds.matches_next_category(key) {
+        load_next_category(state, client).await;
+        return;
+    }
+
+    if state.keybinds.matches_previous_category(key) {
+        load_previous_category(state, client).await;
+        return;
+    }
+
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
         KeyCode::Esc if state.has_category_filter() => state.clear_category_filter(),
         KeyCode::Esc => state.quit(),
-        KeyCode::Tab => state.next_focus(),
         KeyCode::Down | KeyCode::Char('j') => state.move_next(),
         KeyCode::Up | KeyCode::Char('k') => state.move_previous(),
         KeyCode::PageDown => state.page_next(),
@@ -1193,6 +1262,18 @@ async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
     }
 }
 
+async fn load_previous_category(state: &mut AppState, client: &KagiClient) {
+    if state.select_previous_category() {
+        state.load_selected_category(client).await;
+    }
+}
+
+async fn load_next_category(state: &mut AppState, client: &KagiClient) {
+    if state.select_next_category() {
+        state.load_selected_category(client).await;
+    }
+}
+
 fn handle_settings_key(state: &mut AppState, key: KeyEvent) {
     if let Some(action) = state.editing_keybind {
         match key.code {
@@ -1200,6 +1281,11 @@ fn handle_settings_key(state: &mut AppState, key: KeyEvent) {
             KeyCode::Esc => state.cancel_keybind_edit(),
             KeyCode::Enter => state.finish_keybind_edit(action),
             KeyCode::Backspace => state.pop_keybind_input(),
+            KeyCode::Tab if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                state.set_keybind_input(KEY_SHIFT_TAB);
+            }
+            KeyCode::Tab => state.set_keybind_input(KEY_TAB),
+            KeyCode::BackTab => state.set_keybind_input(KEY_SHIFT_TAB),
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 state.clear_keybind_input();
             }
@@ -1360,15 +1446,35 @@ fn find_category(categories: &[Category], requested: &str) -> Option<usize> {
 }
 
 fn configured_key_sequence(value: &str, default: &str, allow_multi: bool) -> String {
-    let char_count = value.chars().count();
-    if valid_key_sequence(value) && (allow_multi || char_count == 1) {
-        value.to_owned()
+    let sequence = normalize_key_sequence(value);
+    if allow_multi {
+        if valid_key_sequence(&sequence) {
+            sequence
+        } else {
+            default.to_owned()
+        }
+    } else if valid_single_key_binding(&sequence) {
+        sequence
     } else {
         default.to_owned()
     }
 }
 
 fn key_matches_sequence(key: KeyEvent, configured: &str) -> bool {
+    if configured == KEY_TAB {
+        return key.code == KeyCode::Tab
+            && !key.modifiers.contains(KeyModifiers::SHIFT)
+            && !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT);
+    }
+
+    if configured == KEY_SHIFT_TAB {
+        return !key.modifiers.contains(KeyModifiers::CONTROL)
+            && !key.modifiers.contains(KeyModifiers::ALT)
+            && (key.code == KeyCode::BackTab
+                || (key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT)));
+    }
+
     let mut chars = configured.chars();
     match (chars.next(), chars.next()) {
         (Some(configured), None) => key_sequence_part(key) == Some(configured),
@@ -1383,19 +1489,56 @@ fn key_sequence_part(key: KeyEvent) -> Option<char> {
     }
 }
 
+fn normalize_key_sequence(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        KEY_TAB => KEY_TAB.to_owned(),
+        KEY_SHIFT_TAB | "shift-tab" | "backtab" => KEY_SHIFT_TAB.to_owned(),
+        "space" => " ".to_owned(),
+        _ => value.to_owned(),
+    }
+}
+
+fn valid_single_key_binding(value: &str) -> bool {
+    if is_named_key_binding(value) {
+        return true;
+    }
+
+    let mut chars = value.chars();
+    match (chars.next(), chars.next()) {
+        (Some(ch), None) => valid_key_sequence_char(ch),
+        _ => false,
+    }
+}
+
 fn valid_key_sequence(value: &str) -> bool {
-    !value.is_empty() && value.chars().all(valid_key_sequence_char)
+    !is_named_key_binding(value) && !value.is_empty() && value.chars().all(valid_key_sequence_char)
 }
 
 fn valid_key_sequence_char(key: char) -> bool {
     !key.is_control()
 }
 
+fn is_named_key_binding(value: &str) -> bool {
+    matches!(value, KEY_TAB | KEY_SHIFT_TAB)
+}
+
 fn key_sequences_conflict(existing: &str, proposed: &str) -> bool {
+    if is_named_key_binding(existing) || is_named_key_binding(proposed) {
+        return existing == proposed;
+    }
+
     existing == proposed || existing.starts_with(proposed) || proposed.starts_with(existing)
 }
 
 fn key_sequence_label(sequence: &str) -> String {
+    if sequence == KEY_TAB {
+        return "Tab".to_owned();
+    }
+
+    if sequence == KEY_SHIFT_TAB {
+        return "Shift+Tab".to_owned();
+    }
+
     if sequence == " " {
         return "Space".to_owned();
     }
@@ -1649,14 +1792,33 @@ mod tests {
     }
 
     #[test]
-    fn focus_cycles_between_categories_and_articles() {
+    fn tab_category_navigation_advances_categories_from_articles() {
         let mut state = state_with_categories(categories());
+        state.focus = Focus::Articles;
 
-        state.next_focus();
+        assert!(state.select_next_category());
+        assert_eq!(state.selected_category, 1);
         assert_eq!(state.focus, Focus::Articles);
+        state.loaded_category = Some(state.selected_category);
 
-        state.next_focus();
-        assert_eq!(state.focus, Focus::Categories);
+        assert!(state.select_next_category());
+        assert_eq!(state.selected_category, 0);
+        assert_eq!(state.focus, Focus::Articles);
+    }
+
+    #[test]
+    fn shift_tab_category_navigation_goes_to_previous_category() {
+        let mut state = state_with_categories(categories());
+        state.focus = Focus::Articles;
+
+        assert!(state.select_previous_category());
+        assert_eq!(state.selected_category, 1);
+        assert_eq!(state.focus, Focus::Articles);
+        state.loaded_category = Some(state.selected_category);
+
+        assert!(state.select_previous_category());
+        assert_eq!(state.selected_category, 0);
+        assert_eq!(state.focus, Focus::Articles);
     }
 
     #[test]
@@ -1847,11 +2009,26 @@ mod tests {
     }
 
     #[test]
+    fn default_category_keybinds_use_tab_keys() {
+        let keybinds = KeyBindings::default();
+
+        assert_eq!(keybinds.next_category, KEY_TAB);
+        assert_eq!(keybinds.previous_category, KEY_SHIFT_TAB);
+        assert!(keybinds.matches_next_category(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)));
+        assert!(
+            keybinds
+                .matches_previous_category(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT))
+        );
+    }
+
+    #[test]
     fn keybinds_use_configured_single_character_values() {
         let settings = KeyBindingSettings {
             help: "h".to_owned(),
             settings: ";".to_owned(),
             category_filter: "f".to_owned(),
+            next_category: "n".to_owned(),
+            previous_category: "p".to_owned(),
             refresh: "u".to_owned(),
             quit: "x".to_owned(),
             reset_defaults: "D".to_owned(),
@@ -1865,6 +2042,8 @@ mod tests {
                 help: "h".to_owned(),
                 settings: ";".to_owned(),
                 category_filter: "f".to_owned(),
+                next_category: "n".to_owned(),
+                previous_category: "p".to_owned(),
                 refresh: "u".to_owned(),
                 quit: "x".to_owned(),
                 reset_defaults: "D".to_owned(),
@@ -1880,6 +2059,8 @@ mod tests {
             help: String::new(),
             settings: "two".to_owned(),
             category_filter: "\n".to_owned(),
+            next_category: "two".to_owned(),
+            previous_category: String::new(),
             refresh: "u".to_owned(),
             quit: "x".to_owned(),
             reset_defaults: "D".to_owned(),
@@ -1892,6 +2073,8 @@ mod tests {
         assert_eq!(keybinds.help, "?");
         assert_eq!(keybinds.settings, ",");
         assert_eq!(keybinds.category_filter, "/");
+        assert_eq!(keybinds.next_category, KEY_TAB);
+        assert_eq!(keybinds.previous_category, KEY_SHIFT_TAB);
         assert_eq!(keybinds.refresh, "u");
         assert_eq!(keybinds.quit, "x");
         assert_eq!(keybinds.reset_defaults, "D");
@@ -1915,6 +2098,28 @@ mod tests {
             keybinds.conflicting_action(KeyBindingAction::Settings, "g"),
             Some(KeyBindingAction::JumpTop)
         );
+        assert_eq!(
+            keybinds.conflicting_action(KeyBindingAction::PreviousCategory, KEY_TAB),
+            Some(KeyBindingAction::NextCategory)
+        );
+        assert_eq!(
+            keybinds.conflicting_action(KeyBindingAction::Help, "t"),
+            None
+        );
+    }
+
+    #[test]
+    fn keybind_editor_accepts_named_tab_keys() {
+        let mut state = state_with_categories(categories());
+        state.editing_keybind = Some(KeyBindingAction::NextCategory);
+
+        handle_settings_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(state.keybind_input, KEY_TAB);
+        assert_eq!(state.status, "Editing Next category: Tab");
+
+        handle_settings_key(&mut state, KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
+        assert_eq!(state.keybind_input, KEY_SHIFT_TAB);
+        assert_eq!(state.status, "Editing Next category: Shift+Tab");
     }
 
     #[test]

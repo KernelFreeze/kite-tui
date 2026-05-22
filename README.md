@@ -20,7 +20,7 @@ cargo run -- --base-url https://news.kagi.com/
 
 ## Controls
 
-- `Tab`: switch panes
+- `Tab` / `Shift+Tab`: load the next or previous category
 - `j` / `k` or arrow keys: move selection
 - `gg` / `G`: jump to the first or last article, or to the top or bottom of an open article
 - `/`: filter categories
@@ -45,6 +45,8 @@ Keybinds can also be customized in the same file:
 help = "?"
 settings = ","
 category_filter = "/"
+next_category = "tab"
+previous_category = "shift+tab"
 refresh = "r"
 quit = "q"
 reset_defaults = "d"

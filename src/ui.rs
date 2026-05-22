@@ -506,7 +506,14 @@ fn render_help_popup(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
             "Last article or article bottom",
         ),
         Line::from(""),
-        help_line("Tab", "Switch panes or settings section"),
+        help_line(
+            format!(
+                "{}/{}",
+                app.keybinds.next_category_label(),
+                app.keybinds.previous_category_label()
+            ),
+            "Next or previous category",
+        ),
         help_line("Left/Right", "Switch settings section"),
         help_line("Enter", "Load category, open article, or edit keybind"),
         help_line("Esc", "Close popup or clear filter"),
