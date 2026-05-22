@@ -40,9 +40,11 @@ cargo run -- --base-url https://news.kagi.com/
 Kite TUI stores category visibility and keybinds in a TOML settings file under
 the platform configuration directory.
 
-Keybinds can also be customized in the same file:
+Themes and keybinds can also be customized in the same file:
 
 ```toml
+theme = "ansi"
+
 [keybinds]
 help = "?"
 settings = ","
@@ -56,6 +58,37 @@ reset_defaults = "d"
 jump_top = "gg"
 jump_bottom = "G"
 ```
+
+Built-in themes are `ansi`, `catppuccin-mocha`, `catppuccin-latte`,
+`dracula`, and `gruvbox-dark`.
+
+Custom themes are TOML files in the `themes` directory next to
+`settings.toml`. The file stem is the theme id, so
+`themes/my-theme.toml` can be selected with `theme = "my-theme"`:
+
+```toml
+name = "My Theme"
+
+[colors]
+text = "#cdd6f4"
+muted = "darkgray"
+subtle = "gray"
+title = "#89dceb"
+accent = "#f9e2af"
+success = "#a6e3a1"
+selected_fg = "black"
+selected_bg = "#a6e3a1"
+settings_selected_bg = "#89dceb"
+editing_bg = "#f9e2af"
+link = "#89dceb"
+focus = "#89dceb"
+border = "darkgray"
+status = "magenta"
+```
+
+Colors can use ANSI names such as `cyan`, `darkgray`, and `light-red`, RGB hex
+strings such as `#cba6f7`, or indexed terminal colors such as `indexed:42`.
+Omitted colors inherit from `ansi`.
 
 ## License
 
