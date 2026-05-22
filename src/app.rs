@@ -42,6 +42,8 @@ pub struct AppState {
     pub focus: Focus,
     pub status: String,
     pub error: Option<String>,
+    pub category_filter: String,
+    pub category_filter_active: bool,
     pub detail_open: bool,
     pub detail_scroll: u16,
     should_quit: bool,
@@ -62,6 +64,8 @@ impl AppState {
             focus: Focus::Articles,
             status: "Loading articles".to_owned(),
             error: None,
+            category_filter: String::new(),
+            category_filter_active: false,
             detail_open: false,
             detail_scroll: 0,
             should_quit: false,
@@ -113,6 +117,127 @@ impl AppState {
         self.articles.get(self.selected_article)
     }
 
+    pub fn has_category_filter(&self) -> bool {
+        !self.category_filter.trim().is_empty()
+    }
+
+    pub fn filtered_category_indices(&self) -> Vec<usize> {
+        self.categories
+            .iter()
+            .enumerate()
+            .filter_map(|(index, category)| self.category_matches_filter(category).then_some(index))
+            .collect()
+    }
+
+    fn category_matches_filter(&self, category: &Category) -> bool {
+        let filter = self.category_filter.trim().to_ascii_lowercase();
+        filter.is_empty()
+            || category.name.to_ascii_lowercase().contains(&filter)
+            || category.file.to_ascii_lowercase().contains(&filter)
+            || category.file_stem().to_ascii_lowercase().contains(&filter)
+    }
+
+    fn selected_category_matches_filter(&self) -> bool {
+        self.selected_category()
+            .is_some_and(|category| self.category_matches_filter(category))
+    }
+
+    fn start_category_filter(&mut self) {
+        self.category_filter_active = true;
+        self.focus = Focus::Categories;
+        self.error = None;
+        self.sync_selected_category_to_filter();
+        self.update_category_filter_status();
+    }
+
+    fn finish_category_filter(&mut self) {
+        self.category_filter_active = false;
+        if self.has_category_filter() {
+            self.update_category_filter_status();
+        } else {
+            self.status = "Category filter cleared".to_owned();
+        }
+    }
+
+    fn clear_category_filter(&mut self) {
+        self.category_filter.clear();
+        self.category_filter_active = false;
+        self.status = "Category filter cleared".to_owned();
+        self.error = None;
+    }
+
+    fn push_category_filter(&mut self, ch: char) {
+        if ch.is_control() {
+            return;
+        }
+
+        self.category_filter.push(ch);
+        self.sync_selected_category_to_filter();
+        self.update_category_filter_status();
+    }
+
+    fn pop_category_filter(&mut self) {
+        self.category_filter.pop();
+        self.sync_selected_category_to_filter();
+        self.update_category_filter_status();
+    }
+
+    fn clear_category_filter_input(&mut self) {
+        self.category_filter.clear();
+        self.sync_selected_category_to_filter();
+        self.update_category_filter_status();
+    }
+
+    fn sync_selected_category_to_filter(&mut self) {
+        if self.selected_category_matches_filter() {
+            return;
+        }
+
+        if let Some(index) = self.filtered_category_indices().first().copied() {
+            self.selected_category = index;
+        }
+    }
+
+    fn update_category_filter_status(&mut self) {
+        let filter = self.category_filter.trim();
+        if filter.is_empty() {
+            self.status = "Type to filter categories".to_owned();
+            return;
+        }
+
+        let matches = self.filtered_category_indices().len();
+        self.status = match matches {
+            0 => format!("No categories match /{filter}"),
+            1 => format!("1 category matches /{filter}"),
+            _ => format!("{matches} categories match /{filter}"),
+        };
+    }
+
+    fn move_category_by(&mut self, step: isize, wrap: bool) {
+        let indices = self.filtered_category_indices();
+        if indices.is_empty() {
+            self.update_category_filter_status();
+            return;
+        }
+
+        let current = indices
+            .iter()
+            .position(|index| *index == self.selected_category)
+            .unwrap_or(0) as isize;
+        let last = indices.len() as isize - 1;
+        let next = if wrap {
+            (current + step).rem_euclid(indices.len() as isize)
+        } else {
+            (current + step).clamp(0, last)
+        };
+
+        self.selected_category = indices[next as usize];
+        self.status = self
+            .selected_category()
+            .map(|category| format!("Selected {}", category.name))
+            .unwrap_or_default();
+    }
+
     fn move_next(&mut self) {
         if self.detail_open {
             self.detail_scroll = self.detail_scroll.saturating_add(1);
@@ -121,13 +246,7 @@ impl AppState {
 
         match self.focus {
             Focus::Categories => {
-                if !self.categories.is_empty() {
-                    self.selected_category = (self.selected_category + 1) % self.categories.len();
-                    self.status = self
-                        .selected_category()
-                        .map(|category| format!("Selected {}", category.name))
-                        .unwrap_or_default();
-                }
+                self.move_category_by(1, true);
             }
             Focus::Articles => {
                 if !self.articles.is_empty() {
@@ -147,16 +266,7 @@ impl AppState {
 
         match self.focus {
             Focus::Categories => {
-                if !self.categories.is_empty() {
-                    self.selected_category = self
-                        .selected_category
-                        .checked_sub(1)
-                        .unwrap_or(self.categories.len() - 1);
-                    self.status = self
-                        .selected_category()
-                        .map(|category| format!("Selected {}", category.name))
-                        .unwrap_or_default();
-                }
+                self.move_category_by(-1, true);
             }
             Focus::Articles => {
                 self.selected_article = self.selected_article.saturating_sub(1);
@@ -180,10 +290,7 @@ impl AppState {
                 }
             }
             Focus::Categories => {
-                if !self.categories.is_empty() {
-                    self.selected_category =
-                        (self.selected_category + 10).min(self.categories.len() - 1);
-                }
+                self.move_category_by(10, false);
             }
         }
     }
@@ -200,7 +307,7 @@ impl AppState {
                 self.detail_scroll = 0;
             }
             Focus::Categories => {
-                self.selected_category = self.selected_category.saturating_sub(10);
+                self.move_category_by(-10, false);
             }
         }
     }
@@ -271,6 +378,11 @@ async fn run_event_loop(
 }
 
 async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
+    if state.category_filter_active {
+        handle_category_filter_key(state, key);
+        return;
+    }
+
     if state.detail_open {
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
@@ -287,17 +399,45 @@ async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
 
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
-        KeyCode::Char('q') | KeyCode::Esc => state.quit(),
+        KeyCode::Char('/') => state.start_category_filter(),
+        KeyCode::Char('q') => state.quit(),
+        KeyCode::Esc if state.has_category_filter() => state.clear_category_filter(),
+        KeyCode::Esc => state.quit(),
         KeyCode::Tab => state.next_focus(),
         KeyCode::Down | KeyCode::Char('j') => state.move_next(),
         KeyCode::Up | KeyCode::Char('k') => state.move_previous(),
         KeyCode::PageDown => state.page_next(),
         KeyCode::PageUp => state.page_previous(),
         KeyCode::Enter => match state.focus {
-            Focus::Categories => state.load_selected_category(client).await,
+            Focus::Categories if state.selected_category_matches_filter() => {
+                state.load_selected_category(client).await
+            }
+            Focus::Categories => state.update_category_filter_status(),
             Focus::Articles => state.open_detail(),
         },
-        KeyCode::Char('r') => state.load_selected_category(client).await,
+        KeyCode::Char('r') if state.selected_category_matches_filter() => {
+            state.load_selected_category(client).await
+        }
+        KeyCode::Char('r') => state.update_category_filter_status(),
+        _ => {}
+    }
+}
+
+fn handle_category_filter_key(state: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.clear_category_filter_input();
+        }
+        KeyCode::Esc | KeyCode::Enter => state.finish_category_filter(),
+        KeyCode::Backspace => state.pop_category_filter(),
+        KeyCode::Down => state.move_next(),
+        KeyCode::Up => state.move_previous(),
+        KeyCode::PageDown => state.page_next(),
+        KeyCode::PageUp => state.page_previous(),
+        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            state.push_category_filter(ch);
+        }
         _ => {}
     }
 }
@@ -363,6 +503,8 @@ mod tests {
             focus: Focus::Categories,
             status: String::new(),
             error: None,
+            category_filter: String::new(),
+            category_filter_active: false,
             detail_open: false,
             detail_scroll: 0,
             should_quit: false,
@@ -373,5 +515,74 @@ mod tests {
 
         state.next_focus();
         assert_eq!(state.focus, Focus::Categories);
+    }
+
+    #[test]
+    fn category_filter_matches_name_file_or_stem() {
+        let mut state = AppState {
+            categories: categories(),
+            selected_category: 0,
+            loaded_category: Some(0),
+            articles: Vec::new(),
+            selected_article: 0,
+            focus: Focus::Categories,
+            status: String::new(),
+            error: None,
+            category_filter: String::new(),
+            category_filter_active: false,
+            detail_open: false,
+            detail_scroll: 0,
+            should_quit: false,
+        };
+
+        state.category_filter = "tech".to_owned();
+        assert_eq!(state.filtered_category_indices(), vec![1]);
+
+        state.category_filter = "json".to_owned();
+        assert_eq!(state.filtered_category_indices(), vec![0, 1]);
+    }
+
+    #[test]
+    fn category_navigation_uses_filtered_matches() {
+        let mut state = AppState {
+            categories: vec![
+                Category {
+                    name: "World".to_owned(),
+                    file: "world.json".to_owned(),
+                    feed_url: Url::parse("https://news.kagi.com/world.xml").unwrap(),
+                },
+                Category {
+                    name: "Technology".to_owned(),
+                    file: "tech.json".to_owned(),
+                    feed_url: Url::parse("https://news.kagi.com/tech.xml").unwrap(),
+                },
+                Category {
+                    name: "Top Stories".to_owned(),
+                    file: "top.json".to_owned(),
+                    feed_url: Url::parse("https://news.kagi.com/top.xml").unwrap(),
+                },
+            ],
+            selected_category: 0,
+            loaded_category: Some(0),
+            articles: Vec::new(),
+            selected_article: 0,
+            focus: Focus::Categories,
+            status: String::new(),
+            error: None,
+            category_filter: "t".to_owned(),
+            category_filter_active: false,
+            detail_open: false,
+            detail_scroll: 0,
+            should_quit: false,
+        };
+
+        state.sync_selected_category_to_filter();
+        assert_eq!(state.selected_category, 1);
+
+        state.move_next();
+        assert_eq!(state.selected_category, 2);
+
+        state.move_next();
+        assert_eq!(state.selected_category, 1);
     }
 }

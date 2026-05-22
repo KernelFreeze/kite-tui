@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
 use time::{OffsetDateTime, macros::format_description};
 
@@ -26,10 +26,6 @@ pub fn draw(frame: &mut Frame<'_>, app: &AppState) {
     render_header(frame, app, vertical[0]);
     render_body(frame, app, vertical[1]);
     render_status(frame, app, vertical[2]);
-
-    if app.detail_open {
-        render_detail_popup(frame, app, area);
-    }
 }
 
 fn render_header(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
@@ -56,44 +52,66 @@ fn render_header(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
 }
 
 fn render_body(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(30), Constraint::Min(30)])
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(8), Constraint::Min(8)])
         .split(area);
 
-    render_categories(frame, app, columns[0]);
-    render_articles(frame, app, columns[1]);
+    render_categories(frame, app, rows[0]);
+    if app.detail_open {
+        render_article_detail(frame, app, rows[1]);
+    } else {
+        render_articles(frame, app, rows[1]);
+    }
 }
 
 fn render_categories(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
-    let items = app
-        .categories
-        .iter()
-        .enumerate()
-        .map(|(index, category)| {
-            let marker = if index == app.selected_category {
-                ">"
-            } else if Some(index) == app.loaded_category {
-                "*"
-            } else {
-                " "
-            };
-            let style = if index == app.selected_category {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
-            } else {
-                Style::default()
-            };
+    let visible_categories = app.filtered_category_indices();
+    let items = if visible_categories.is_empty() {
+        let message = if app.has_category_filter() {
+            "No matching categories."
+        } else {
+            "No categories loaded."
+        };
+        vec![ListItem::new(message)]
+    } else {
+        visible_categories
+            .into_iter()
+            .filter_map(|index| {
+                app.categories.get(index).map(|category| {
+                    let marker = if index == app.selected_category {
+                        ">"
+                    } else if Some(index) == app.loaded_category {
+                        "*"
+                    } else {
+                        " "
+                    };
+                    let style = if index == app.selected_category {
+                        Style::default().fg(Color::Black).bg(Color::Cyan)
+                    } else {
+                        Style::default()
+                    };
 
-            ListItem::new(Line::from(vec![
-                Span::raw(marker),
-                Span::raw(" "),
-                Span::raw(category.name.clone()),
-            ]))
-            .style(style)
-        })
-        .collect::<Vec<_>>();
+                    ListItem::new(Line::from(vec![
+                        Span::raw(marker),
+                        Span::raw(" "),
+                        Span::raw(category.name.clone()),
+                    ]))
+                    .style(style)
+                })
+            })
+            .collect::<Vec<_>>()
+    };
 
-    let block = focused_block("Categories", app.focus == Focus::Categories);
+    let title = if app.category_filter_active || app.has_category_filter() {
+        format!("Categories /{}", app.category_filter)
+    } else {
+        "Categories".to_owned()
+    };
+    let block = focused_block(
+        title,
+        app.focus == Focus::Categories || app.category_filter_active,
+    );
     frame.render_widget(List::new(items).block(block), area);
 }
 
@@ -135,25 +153,23 @@ fn render_articles(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     frame.render_widget(List::new(items).block(block), area);
 }
 
-fn render_detail_popup(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
-    let area = centered_rect(84, 86, area);
+fn render_article_detail(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     let lines = app
         .selected_article()
         .map(article_detail)
         .unwrap_or_else(|| vec![Line::from("No article selected.")]);
 
     let paragraph = Paragraph::new(Text::from(lines))
-        .block(focused_block("Story - Esc closes", true))
+        .block(focused_block("Article", true))
         .wrap(Wrap { trim: false })
         .scroll((app.detail_scroll, 0));
 
-    frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
 }
 
 fn render_status(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     let focus = if app.detail_open {
-        "Story"
+        "Article"
     } else {
         match app.focus {
             Focus::Categories => "Categories",
@@ -161,11 +177,13 @@ fn render_status(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
         }
     };
     let help = if app.detail_open {
-        "Esc/Enter close, j/k scroll, q quit"
+        "Esc/Enter returns to list, j/k scroll, q quit"
+    } else if app.category_filter_active {
+        "Type to filter, Enter/Esc accept, Backspace edits"
     } else {
         match app.focus {
-            Focus::Categories => "Enter loads category, Tab switches panes",
-            Focus::Articles => "Enter opens story, Tab switches panes",
+            Focus::Categories => "/ filters categories, Enter loads category, Tab switches panes",
+            Focus::Articles => "/ filters categories, Enter opens article, Tab switches panes",
         }
     };
     let status = app.error.as_deref().unwrap_or(&app.status);
@@ -217,7 +235,7 @@ fn article_detail(article: &Article) -> Vec<Line<'static>> {
     lines
 }
 
-fn focused_block(title: &'static str, focused: bool) -> Block<'static> {
+fn focused_block(title: impl Into<String>, focused: bool) -> Block<'static> {
     let style = if focused {
         Style::default().fg(Color::Cyan)
     } else {
@@ -227,29 +245,7 @@ fn focused_block(title: &'static str, focused: bool) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .border_style(style)
-        .title(title)
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical_margin = (100 - percent_y) / 2;
-    let horizontal_margin = (100 - percent_x) / 2;
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(vertical_margin),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage(vertical_margin),
-        ])
-        .split(area);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(horizontal_margin),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage(horizontal_margin),
-        ])
-        .split(popup_layout[1])[1]
+        .title(title.into())
 }
 
 fn format_short_date(date: OffsetDateTime) -> String {
