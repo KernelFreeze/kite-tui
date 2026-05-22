@@ -8,7 +8,7 @@ use ratatui::{
 use time::{OffsetDateTime, macros::format_description};
 
 use crate::{
-    app::{AppState, Focus},
+    app::{AppState, Focus, KeyBindingAction, SettingsSection},
     models::{Article, SummaryBlock},
 };
 
@@ -27,8 +27,8 @@ pub fn draw(frame: &mut Frame<'_>, app: &AppState) {
     render_body(frame, app, vertical[1]);
     render_status(frame, app, vertical[2]);
 
-    if app.config_open {
-        render_category_config_popup(frame, app, area);
+    if app.settings_open {
+        render_settings_popup(frame, app, area);
     }
     if app.help_open {
         render_help_popup(frame, app, area);
@@ -247,14 +247,57 @@ fn render_article_detail(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_category_config_popup(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
-    let popup = centered_rect(86, 86, area);
+fn render_settings_popup(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
+    let popup = centered_rect(88, 86, area);
     frame.render_widget(Clear, popup);
 
-    let block = focused_block("Category Settings", true);
+    let block = focused_block("Settings", true);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(8)])
+        .split(inner);
+
+    render_settings_tabs(frame, app, chunks[0]);
+
+    match app.settings_section {
+        SettingsSection::Categories => render_category_settings(frame, app, chunks[1]),
+        SettingsSection::Keybinds => render_keybind_settings(frame, app, chunks[1]),
+    }
+}
+
+fn render_settings_tabs(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
+    let mut spans = Vec::new();
+
+    for (index, section) in [SettingsSection::Categories, SettingsSection::Keybinds]
+        .into_iter()
+        .enumerate()
+    {
+        if index > 0 {
+            spans.push(Span::raw(" "));
+        }
+
+        let selected = app.settings_section == section;
+        let style = if selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        spans.push(Span::styled(format!(" {} ", section.title()), style));
+    }
+
+    frame.render_widget(
+        Paragraph::new(Line::from(spans)).block(Block::default().borders(Borders::BOTTOM)),
+        area,
+    );
+}
+
+fn render_category_settings(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -262,7 +305,7 @@ fn render_category_config_popup(frame: &mut Frame<'_>, app: &AppState, area: Rec
             Constraint::Length(3),
             Constraint::Min(5),
         ])
-        .split(inner);
+        .split(area);
 
     render_enabled_category_summary(frame, app, chunks[0]);
     render_config_filter(frame, app, chunks[1]);
@@ -366,7 +409,69 @@ fn render_config_category_list(frame: &mut Frame<'_>, app: &AppState, area: Rect
     );
 
     frame.render_stateful_widget(
-        List::new(items).block(focused_block(title, true)),
+        List::new(items).block(focused_block(
+            title,
+            app.settings_section == SettingsSection::Categories,
+        )),
+        area,
+        &mut list_state,
+    );
+}
+
+fn render_keybind_settings(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
+    let items = KeyBindingAction::ALL
+        .into_iter()
+        .enumerate()
+        .map(|(index, action)| {
+            let selected = index == app.selected_keybind;
+            let editing = app.editing_keybind == Some(action);
+            let style = if editing {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else if selected {
+                Style::default().fg(Color::Black).bg(Color::Cyan)
+            } else {
+                Style::default()
+            };
+            let marker = if selected { ">" } else { " " };
+            let key_style = if editing {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Yellow)
+            };
+            let key_label = if editing {
+                if app.keybind_input.is_empty() {
+                    "...".to_owned()
+                } else {
+                    key_sequence_label(&app.keybind_input)
+                }
+            } else {
+                app.keybinds.action_label(action)
+            };
+
+            ListItem::new(Line::from(vec![
+                Span::raw(marker),
+                Span::raw(" "),
+                Span::raw(format!("{:<18}", action.label())),
+                Span::styled(format!("{:<10}", key_label), key_style),
+                Span::raw(action.description()),
+            ]))
+            .style(style)
+        })
+        .collect::<Vec<_>>();
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(app.selected_keybind));
+    frame.render_stateful_widget(
+        List::new(items).block(focused_block(
+            "Keybinds",
+            app.settings_section == SettingsSection::Keybinds,
+        )),
         area,
         &mut list_state,
     );
@@ -378,17 +483,26 @@ fn render_help_popup(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
 
     let lines = vec![
         help_line(app.keybinds.help_label(), "Open help"),
-        help_line(app.keybinds.config_label(), "Configure categories"),
+        help_line(app.keybinds.settings_label(), "Open settings"),
         help_line(app.keybinds.category_filter_label(), "Filter categories"),
         help_line(app.keybinds.refresh_label(), "Refresh category"),
         help_line(app.keybinds.quit_label(), "Quit or close popup"),
         help_line(
             app.keybinds.reset_defaults_label(),
-            "Restore default categories in settings",
+            "Restore defaults in settings",
+        ),
+        help_line(
+            app.keybinds.action_label(KeyBindingAction::JumpTop),
+            "First article or article top",
+        ),
+        help_line(
+            app.keybinds.action_label(KeyBindingAction::JumpBottom),
+            "Last article or article bottom",
         ),
         Line::from(""),
-        help_line("Tab", "Switch panes"),
-        help_line("Enter", "Load category or open article"),
+        help_line("Tab", "Switch panes or settings section"),
+        help_line("Left/Right", "Switch settings section"),
+        help_line("Enter", "Load category, open article, or edit keybind"),
         help_line("Esc", "Close popup or clear filter"),
         help_line("j/k, arrows", "Move selection"),
         help_line("PageUp/PageDown", "Move by page"),
@@ -414,11 +528,30 @@ fn help_line(key: impl Into<String>, description: impl Into<String>) -> Line<'st
     ])
 }
 
+fn key_sequence_label(sequence: &str) -> String {
+    if sequence == " " {
+        return "Space".to_owned();
+    }
+
+    if sequence.chars().all(|ch| !ch.is_whitespace()) {
+        return sequence.to_owned();
+    }
+
+    sequence
+        .chars()
+        .map(|ch| match ch {
+            ' ' => "Space".to_owned(),
+            _ => ch.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn render_status(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     let focus = if app.help_open {
         "Help"
-    } else if app.config_open {
-        "Config"
+    } else if app.settings_open {
+        "Settings"
     } else if app.detail_open {
         "Article"
     } else {

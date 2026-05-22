@@ -36,8 +36,8 @@ pub struct KeyBindingSettings {
     #[serde(default = "default_help_key")]
     pub help: String,
 
-    #[serde(default = "default_config_key")]
-    pub config: String,
+    #[serde(default = "default_settings_key", alias = "config")]
+    pub settings: String,
 
     #[serde(default = "default_category_filter_key")]
     pub category_filter: String,
@@ -50,17 +50,25 @@ pub struct KeyBindingSettings {
 
     #[serde(default = "default_reset_defaults_key")]
     pub reset_defaults: String,
+
+    #[serde(default = "default_jump_top_key")]
+    pub jump_top: String,
+
+    #[serde(default = "default_jump_bottom_key")]
+    pub jump_bottom: String,
 }
 
 impl Default for KeyBindingSettings {
     fn default() -> Self {
         Self {
             help: default_help_key(),
-            config: default_config_key(),
+            settings: default_settings_key(),
             category_filter: default_category_filter_key(),
             refresh: default_refresh_key(),
             quit: default_quit_key(),
             reset_defaults: default_reset_defaults_key(),
+            jump_top: default_jump_top_key(),
+            jump_bottom: default_jump_bottom_key(),
         }
     }
 }
@@ -162,7 +170,7 @@ fn default_help_key() -> String {
     "?".to_owned()
 }
 
-fn default_config_key() -> String {
+fn default_settings_key() -> String {
     ",".to_owned()
 }
 
@@ -180,6 +188,14 @@ fn default_quit_key() -> String {
 
 fn default_reset_defaults_key() -> String {
     "d".to_owned()
+}
+
+fn default_jump_top_key() -> String {
+    "gg".to_owned()
+}
+
+fn default_jump_bottom_key() -> String {
+    "G".to_owned()
 }
 
 #[cfg(test)]
@@ -241,12 +257,27 @@ mod tests {
             decoded.keybinds,
             KeyBindingSettings {
                 help: "?".to_owned(),
-                config: ",".to_owned(),
+                settings: ",".to_owned(),
                 category_filter: "/".to_owned(),
                 refresh: "r".to_owned(),
                 quit: "q".to_owned(),
                 reset_defaults: "d".to_owned(),
+                jump_top: "gg".to_owned(),
+                jump_bottom: "G".to_owned(),
             }
         );
+    }
+
+    #[test]
+    fn legacy_config_keybind_name_loads_as_settings() {
+        let decoded = toml::from_str::<Settings>(
+            r#"
+            [keybinds]
+            config = ";"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(decoded.keybinds.settings, ";");
     }
 }

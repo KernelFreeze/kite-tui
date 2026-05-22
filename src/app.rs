@@ -11,7 +11,7 @@ use crate::{
     args::Args,
     error::{KiteError, Result},
     kagi::KagiClient,
-    models::{Article, Category},
+    models::{Article, Category, SummaryBlock},
     settings::{self, CategorySettings, KeyBindingSettings, Settings},
     ui,
 };
@@ -45,24 +45,112 @@ impl Focus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsSection {
+    Categories,
+    Keybinds,
+}
+
+impl SettingsSection {
+    fn next(self) -> Self {
+        match self {
+            Self::Categories => Self::Keybinds,
+            Self::Keybinds => Self::Categories,
+        }
+    }
+
+    fn previous(self) -> Self {
+        match self {
+            Self::Categories => Self::Keybinds,
+            Self::Keybinds => Self::Categories,
+        }
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Categories => "Categories",
+            Self::Keybinds => "Keybinds",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyBindingAction {
+    Help,
+    Settings,
+    CategoryFilter,
+    Refresh,
+    Quit,
+    ResetDefaults,
+    JumpTop,
+    JumpBottom,
+}
+
+impl KeyBindingAction {
+    pub const ALL: [Self; 8] = [
+        Self::Help,
+        Self::Settings,
+        Self::CategoryFilter,
+        Self::Refresh,
+        Self::Quit,
+        Self::ResetDefaults,
+        Self::JumpTop,
+        Self::JumpBottom,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Help => "Help",
+            Self::Settings => "Settings",
+            Self::CategoryFilter => "Category filter",
+            Self::Refresh => "Refresh",
+            Self::Quit => "Quit",
+            Self::ResetDefaults => "Restore defaults",
+            Self::JumpTop => "Jump to top",
+            Self::JumpBottom => "Jump to bottom",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Help => "Open help",
+            Self::Settings => "Open settings",
+            Self::CategoryFilter => "Filter categories",
+            Self::Refresh => "Refresh selected category",
+            Self::Quit => "Quit or close popup",
+            Self::ResetDefaults => "Restore defaults in settings",
+            Self::JumpTop => "First article or article top",
+            Self::JumpBottom => "Last article or article bottom",
+        }
+    }
+
+    fn supports_sequences(self) -> bool {
+        matches!(self, Self::JumpTop | Self::JumpBottom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyBindings {
-    pub help: char,
-    pub config: char,
-    pub category_filter: char,
-    pub refresh: char,
-    pub quit: char,
-    pub reset_defaults: char,
+    pub help: String,
+    pub settings: String,
+    pub category_filter: String,
+    pub refresh: String,
+    pub quit: String,
+    pub reset_defaults: String,
+    pub jump_top: String,
+    pub jump_bottom: String,
 }
 
 impl Default for KeyBindings {
     fn default() -> Self {
         Self {
-            help: '?',
-            config: ',',
-            category_filter: '/',
-            refresh: 'r',
-            quit: 'q',
-            reset_defaults: 'd',
+            help: "?".to_owned(),
+            settings: ",".to_owned(),
+            category_filter: "/".to_owned(),
+            refresh: "r".to_owned(),
+            quit: "q".to_owned(),
+            reset_defaults: "d".to_owned(),
+            jump_top: "gg".to_owned(),
+            jump_bottom: "G".to_owned(),
         }
     }
 }
@@ -72,72 +160,141 @@ impl KeyBindings {
         let defaults = Self::default();
 
         Self {
-            help: configured_key(&settings.help, defaults.help),
-            config: configured_key(&settings.config, defaults.config),
-            category_filter: configured_key(&settings.category_filter, defaults.category_filter),
-            refresh: configured_key(&settings.refresh, defaults.refresh),
-            quit: configured_key(&settings.quit, defaults.quit),
-            reset_defaults: configured_key(&settings.reset_defaults, defaults.reset_defaults),
+            help: configured_key_sequence(&settings.help, &defaults.help, false),
+            settings: configured_key_sequence(&settings.settings, &defaults.settings, false),
+            category_filter: configured_key_sequence(
+                &settings.category_filter,
+                &defaults.category_filter,
+                false,
+            ),
+            refresh: configured_key_sequence(&settings.refresh, &defaults.refresh, false),
+            quit: configured_key_sequence(&settings.quit, &defaults.quit, false),
+            reset_defaults: configured_key_sequence(
+                &settings.reset_defaults,
+                &defaults.reset_defaults,
+                false,
+            ),
+            jump_top: configured_key_sequence(&settings.jump_top, &defaults.jump_top, true),
+            jump_bottom: configured_key_sequence(
+                &settings.jump_bottom,
+                &defaults.jump_bottom,
+                true,
+            ),
         }
     }
 
-    fn as_settings(self) -> KeyBindingSettings {
+    fn as_settings(&self) -> KeyBindingSettings {
         KeyBindingSettings {
-            help: self.help.to_string(),
-            config: self.config.to_string(),
-            category_filter: self.category_filter.to_string(),
-            refresh: self.refresh.to_string(),
-            quit: self.quit.to_string(),
-            reset_defaults: self.reset_defaults.to_string(),
+            help: self.help.clone(),
+            settings: self.settings.clone(),
+            category_filter: self.category_filter.clone(),
+            refresh: self.refresh.clone(),
+            quit: self.quit.clone(),
+            reset_defaults: self.reset_defaults.clone(),
+            jump_top: self.jump_top.clone(),
+            jump_bottom: self.jump_bottom.clone(),
         }
     }
 
-    pub fn help_label(self) -> String {
-        key_label(self.help)
+    pub fn help_label(&self) -> String {
+        key_sequence_label(&self.help)
     }
 
-    pub fn config_label(self) -> String {
-        key_label(self.config)
+    pub fn settings_label(&self) -> String {
+        key_sequence_label(&self.settings)
     }
 
-    pub fn category_filter_label(self) -> String {
-        key_label(self.category_filter)
+    pub fn category_filter_label(&self) -> String {
+        key_sequence_label(&self.category_filter)
     }
 
-    pub fn refresh_label(self) -> String {
-        key_label(self.refresh)
+    pub fn refresh_label(&self) -> String {
+        key_sequence_label(&self.refresh)
     }
 
-    pub fn quit_label(self) -> String {
-        key_label(self.quit)
+    pub fn quit_label(&self) -> String {
+        key_sequence_label(&self.quit)
     }
 
-    pub fn reset_defaults_label(self) -> String {
-        key_label(self.reset_defaults)
+    pub fn reset_defaults_label(&self) -> String {
+        key_sequence_label(&self.reset_defaults)
     }
 
-    fn matches_help(self, key: KeyEvent) -> bool {
-        key_matches_char(key, self.help)
+    pub fn action_label(&self, action: KeyBindingAction) -> String {
+        key_sequence_label(self.action_sequence(action))
     }
 
-    fn matches_config(self, key: KeyEvent) -> bool {
-        key_matches_char(key, self.config)
+    fn action_sequence(&self, action: KeyBindingAction) -> &str {
+        match action {
+            KeyBindingAction::Help => &self.help,
+            KeyBindingAction::Settings => &self.settings,
+            KeyBindingAction::CategoryFilter => &self.category_filter,
+            KeyBindingAction::Refresh => &self.refresh,
+            KeyBindingAction::Quit => &self.quit,
+            KeyBindingAction::ResetDefaults => &self.reset_defaults,
+            KeyBindingAction::JumpTop => &self.jump_top,
+            KeyBindingAction::JumpBottom => &self.jump_bottom,
+        }
     }
 
-    fn matches_category_filter(self, key: KeyEvent) -> bool {
-        key_matches_char(key, self.category_filter)
+    fn set_action_sequence(&mut self, action: KeyBindingAction, sequence: String) {
+        match action {
+            KeyBindingAction::Help => self.help = sequence,
+            KeyBindingAction::Settings => self.settings = sequence,
+            KeyBindingAction::CategoryFilter => self.category_filter = sequence,
+            KeyBindingAction::Refresh => self.refresh = sequence,
+            KeyBindingAction::Quit => self.quit = sequence,
+            KeyBindingAction::ResetDefaults => self.reset_defaults = sequence,
+            KeyBindingAction::JumpTop => self.jump_top = sequence,
+            KeyBindingAction::JumpBottom => self.jump_bottom = sequence,
+        }
     }
 
-    fn matches_refresh(self, key: KeyEvent) -> bool {
-        key_matches_char(key, self.refresh)
+    fn conflicting_action(
+        &self,
+        action: KeyBindingAction,
+        sequence: &str,
+    ) -> Option<KeyBindingAction> {
+        KeyBindingAction::ALL.into_iter().find(|candidate| {
+            *candidate != action
+                && key_sequences_conflict(self.action_sequence(*candidate), sequence)
+        })
     }
 
-    fn matches_quit(self, key: KeyEvent) -> bool {
-        key_matches_char(key, self.quit)
+    fn has_article_sequence_prefix(&self, sequence: &str) -> bool {
+        self.jump_top.starts_with(sequence) || self.jump_bottom.starts_with(sequence)
     }
 
-    fn matches_reset_defaults(self, key: KeyEvent) -> bool {
-        key_matches_char(key, self.reset_defaults)
+    fn matches_article_jump_top(&self, sequence: &str) -> bool {
+        self.jump_top == sequence
+    }
+
+    fn matches_article_jump_bottom(&self, sequence: &str) -> bool {
+        self.jump_bottom == sequence
+    }
+
+    fn matches_help(&self, key: KeyEvent) -> bool {
+        key_matches_sequence(key, &self.help)
+    }
+
+    fn matches_settings(&self, key: KeyEvent) -> bool {
+        key_matches_sequence(key, &self.settings)
+    }
+
+    fn matches_category_filter(&self, key: KeyEvent) -> bool {
+        key_matches_sequence(key, &self.category_filter)
+    }
+
+    fn matches_refresh(&self, key: KeyEvent) -> bool {
+        key_matches_sequence(key, &self.refresh)
+    }
+
+    fn matches_quit(&self, key: KeyEvent) -> bool {
+        key_matches_sequence(key, &self.quit)
+    }
+
+    fn matches_reset_defaults(&self, key: KeyEvent) -> bool {
+        key_matches_sequence(key, &self.reset_defaults)
     }
 }
 
@@ -155,13 +312,18 @@ pub struct AppState {
     pub error: Option<String>,
     pub category_filter: String,
     pub category_filter_active: bool,
-    pub config_open: bool,
+    pub settings_open: bool,
+    pub settings_section: SettingsSection,
     pub config_selected_category: usize,
     pub config_filter: String,
     pub config_filter_active: bool,
+    pub selected_keybind: usize,
+    pub editing_keybind: Option<KeyBindingAction>,
+    pub keybind_input: String,
     pub help_open: bool,
     pub detail_open: bool,
     pub detail_scroll: u16,
+    pending_key_sequence: String,
     should_quit: bool,
 }
 
@@ -188,13 +350,18 @@ impl AppState {
             error: None,
             category_filter: String::new(),
             category_filter_active: false,
-            config_open: false,
+            settings_open: false,
+            settings_section: SettingsSection::Categories,
             config_selected_category: selected_category,
             config_filter: String::new(),
             config_filter_active: false,
+            selected_keybind: 0,
+            editing_keybind: None,
+            keybind_input: String::new(),
             help_open: false,
             detail_open: false,
             detail_scroll: 0,
+            pending_key_sequence: String::new(),
             should_quit: false,
         };
 
@@ -313,6 +480,7 @@ impl AppState {
     }
 
     fn start_category_filter(&mut self) {
+        self.pending_key_sequence.clear();
         self.category_filter_active = true;
         self.focus = Focus::Categories;
         self.error = None;
@@ -383,10 +551,14 @@ impl AppState {
         };
     }
 
-    fn open_category_config(&mut self) {
-        self.config_open = true;
+    fn open_settings(&mut self) {
+        self.pending_key_sequence.clear();
+        self.settings_open = true;
+        self.settings_section = SettingsSection::Categories;
         self.config_selected_category = self.selected_category;
         self.config_filter_active = false;
+        self.editing_keybind = None;
+        self.keybind_input.clear();
         self.category_filter_active = false;
         self.detail_open = false;
         self.detail_scroll = 0;
@@ -395,9 +567,11 @@ impl AppState {
         self.update_category_config_status();
     }
 
-    fn close_category_config(&mut self) {
-        self.config_open = false;
+    fn close_settings(&mut self) {
+        self.settings_open = false;
         self.config_filter_active = false;
+        self.editing_keybind = None;
+        self.keybind_input.clear();
         self.status = format!(
             "{} categories shown, {} hidden",
             self.enabled_category_count(),
@@ -406,7 +580,24 @@ impl AppState {
         self.sync_selected_category_to_filter();
     }
 
+    fn next_settings_section(&mut self) {
+        self.settings_section = self.settings_section.next();
+        self.config_filter_active = false;
+        self.editing_keybind = None;
+        self.keybind_input.clear();
+        self.update_settings_status();
+    }
+
+    fn previous_settings_section(&mut self) {
+        self.settings_section = self.settings_section.previous();
+        self.config_filter_active = false;
+        self.editing_keybind = None;
+        self.keybind_input.clear();
+        self.update_settings_status();
+    }
+
     fn open_help(&mut self) {
+        self.pending_key_sequence.clear();
         self.help_open = true;
         self.error = None;
     }
@@ -483,6 +674,29 @@ impl AppState {
         };
     }
 
+    fn update_settings_status(&mut self) {
+        match self.settings_section {
+            SettingsSection::Categories => self.update_category_config_status(),
+            SettingsSection::Keybinds => self.update_keybind_settings_status(),
+        }
+    }
+
+    fn update_keybind_settings_status(&mut self) {
+        if let Some(action) = self.editing_keybind {
+            if self.keybind_input.is_empty() {
+                self.status = format!("Type a key sequence for {}", action.label());
+            } else {
+                self.status = format!(
+                    "Editing {}: {}",
+                    action.label(),
+                    key_sequence_label(&self.keybind_input)
+                );
+            }
+        } else {
+            self.status = "Select a keybind and press Enter to edit".to_owned();
+        }
+    }
+
     fn move_config_category_by(&mut self, step: isize, wrap: bool) {
         let indices = self.filtered_config_category_indices();
         if indices.is_empty() {
@@ -538,7 +752,7 @@ impl AppState {
             format!("Hiding {category_name}")
         };
         self.sync_selected_category_to_filter();
-        self.persist_category_config();
+        self.persist_settings();
     }
 
     fn reset_default_category_config(&mut self) {
@@ -546,16 +760,111 @@ impl AppState {
         self.sync_selected_category_to_filter();
         self.sync_config_selected_category_to_filter();
         self.update_category_config_status();
-        self.persist_category_config();
+        self.persist_settings();
     }
 
-    fn persist_category_config(&mut self) {
-        if let Err(error) = self.category_settings().save() {
+    fn move_keybind_by(&mut self, step: isize, wrap: bool) {
+        let len = KeyBindingAction::ALL.len();
+        let current = self.selected_keybind.min(len.saturating_sub(1)) as isize;
+        let last = len as isize - 1;
+        let next = if wrap {
+            (current + step).rem_euclid(len as isize)
+        } else {
+            (current + step).clamp(0, last)
+        };
+
+        self.selected_keybind = next as usize;
+        if let Some(action) = self.selected_keybind_action() {
+            self.status = format!("Selected {}", action.label());
+        }
+    }
+
+    fn start_keybind_edit(&mut self) {
+        let Some(action) = self.selected_keybind_action() else {
+            return;
+        };
+
+        self.editing_keybind = Some(action);
+        self.keybind_input.clear();
+        self.update_keybind_settings_status();
+    }
+
+    fn cancel_keybind_edit(&mut self) {
+        self.editing_keybind = None;
+        self.keybind_input.clear();
+        self.status = "Keybind edit cancelled".to_owned();
+    }
+
+    fn push_keybind_input(&mut self, ch: char) {
+        if !valid_key_sequence_char(ch) {
+            self.status = "Keybinds must use printable keys".to_owned();
+            return;
+        }
+
+        self.keybind_input.push(ch);
+        self.update_keybind_settings_status();
+    }
+
+    fn pop_keybind_input(&mut self) {
+        self.keybind_input.pop();
+        self.update_keybind_settings_status();
+    }
+
+    fn clear_keybind_input(&mut self) {
+        self.keybind_input.clear();
+        self.update_keybind_settings_status();
+    }
+
+    fn finish_keybind_edit(&mut self, action: KeyBindingAction) {
+        let sequence = self.keybind_input.clone();
+        if !valid_key_sequence(&sequence) {
+            self.status = "Keybinds must not be empty".to_owned();
+            return;
+        }
+        if !action.supports_sequences() && sequence.chars().count() != 1 {
+            self.status = format!("{} requires a single key", action.label());
+            return;
+        }
+
+        if let Some(conflict) = self.keybinds.conflicting_action(action, &sequence) {
+            self.status = format!(
+                "{} is already used for {}",
+                key_sequence_label(&sequence),
+                conflict.label()
+            );
+            return;
+        }
+
+        self.keybinds.set_action_sequence(action, sequence.clone());
+        self.editing_keybind = None;
+        self.keybind_input.clear();
+        self.status = format!(
+            "{} keybind set to {}",
+            action.label(),
+            key_sequence_label(&sequence)
+        );
+        self.persist_settings();
+    }
+
+    fn reset_default_keybinds(&mut self) {
+        self.keybinds = KeyBindings::default();
+        self.editing_keybind = None;
+        self.keybind_input.clear();
+        self.status = "Keybinds restored to defaults".to_owned();
+        self.persist_settings();
+    }
+
+    fn selected_keybind_action(&self) -> Option<KeyBindingAction> {
+        KeyBindingAction::ALL.get(self.selected_keybind).copied()
+    }
+
+    fn persist_settings(&mut self) {
+        if let Err(error) = self.current_settings().save() {
             self.error = Some(error.to_string());
         }
     }
 
-    fn category_settings(&self) -> Settings {
+    fn current_settings(&self) -> Settings {
         Settings {
             categories: CategorySettings {
                 enabled: self
@@ -667,6 +976,56 @@ impl AppState {
         }
     }
 
+    fn jump_to_top(&mut self) {
+        if self.detail_open {
+            self.detail_scroll = 0;
+            self.status = "Top of article".to_owned();
+            return;
+        }
+
+        if self.focus == Focus::Articles && !self.articles.is_empty() {
+            self.selected_article = 0;
+            self.detail_scroll = 0;
+            self.status = "Selected first article".to_owned();
+        }
+    }
+
+    fn jump_to_bottom(&mut self) {
+        if self.detail_open {
+            self.detail_scroll = self
+                .selected_article_line_count()
+                .saturating_sub(1)
+                .min(usize::from(u16::MAX)) as u16;
+            self.status = "Bottom of article".to_owned();
+            return;
+        }
+
+        if self.focus == Focus::Articles && !self.articles.is_empty() {
+            self.selected_article = self.articles.len() - 1;
+            self.detail_scroll = 0;
+            self.status = "Selected last article".to_owned();
+        }
+    }
+
+    fn selected_article_line_count(&self) -> usize {
+        let Some(article) = self.selected_article() else {
+            return 0;
+        };
+
+        let mut lines = 3;
+        if article.summary_blocks.is_empty() {
+            lines += article.summary.lines().count();
+        } else {
+            lines += summary_block_line_count(&article.summary_blocks);
+        }
+
+        if article.link.is_some() {
+            lines += 2;
+        }
+
+        lines
+    }
+
     fn next_focus(&mut self) {
         if self.detail_open {
             return;
@@ -677,12 +1036,14 @@ impl AppState {
 
     fn open_detail(&mut self) {
         if !self.articles.is_empty() {
+            self.pending_key_sequence.clear();
             self.detail_open = true;
             self.detail_scroll = 0;
         }
     }
 
     fn close_detail(&mut self) {
+        self.pending_key_sequence.clear();
         self.detail_open = false;
         self.detail_scroll = 0;
     }
@@ -738,13 +1099,16 @@ async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
         return;
     }
 
-    if state.config_open {
-        if !state.config_filter_active && state.keybinds.matches_help(key) {
+    if state.settings_open {
+        if state.editing_keybind.is_none()
+            && !state.config_filter_active
+            && state.keybinds.matches_help(key)
+        {
             state.open_help();
             return;
         }
 
-        handle_category_config_key(state, key);
+        handle_settings_key(state, key);
         return;
     }
 
@@ -759,6 +1123,10 @@ async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
     }
 
     if state.detail_open {
+        if handle_article_sequence_key(state, key) {
+            return;
+        }
+
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
             KeyCode::Esc | KeyCode::Enter => state.close_detail(),
@@ -771,6 +1139,10 @@ async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
         if state.keybinds.matches_quit(key) {
             state.quit();
         }
+        return;
+    }
+
+    if state.focus == Focus::Articles && handle_article_sequence_key(state, key) {
         return;
     }
 
@@ -793,8 +1165,8 @@ async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
         _ => {}
     }
 
-    if state.keybinds.matches_config(key) {
-        state.open_category_config();
+    if state.keybinds.matches_settings(key) {
+        state.open_settings();
     } else if state.keybinds.matches_category_filter(key) {
         state.start_category_filter();
     } else if state.keybinds.matches_quit(key) {
@@ -808,7 +1180,26 @@ async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
     }
 }
 
-fn handle_category_config_key(state: &mut AppState, key: KeyEvent) {
+fn handle_settings_key(state: &mut AppState, key: KeyEvent) {
+    if let Some(action) = state.editing_keybind {
+        match key.code {
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
+            KeyCode::Esc => state.cancel_keybind_edit(),
+            KeyCode::Enter => state.finish_keybind_edit(action),
+            KeyCode::Backspace => state.pop_keybind_input(),
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                state.clear_keybind_input();
+            }
+            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                state.push_keybind_input(ch);
+            }
+            _ => {
+                state.status = "Type printable keys, Enter to save, or Esc to cancel".to_owned();
+            }
+        }
+        return;
+    }
+
     if state.config_filter_active {
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
@@ -832,7 +1223,19 @@ fn handle_category_config_key(state: &mut AppState, key: KeyEvent) {
 
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
-        KeyCode::Esc | KeyCode::Enter => state.close_category_config(),
+        KeyCode::Esc => state.close_settings(),
+        KeyCode::Tab | KeyCode::Right => state.next_settings_section(),
+        KeyCode::Left => state.previous_settings_section(),
+        _ => match state.settings_section {
+            SettingsSection::Categories => handle_category_settings_key(state, key),
+            SettingsSection::Keybinds => handle_keybind_settings_key(state, key),
+        },
+    }
+}
+
+fn handle_category_settings_key(state: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Enter => state.close_settings(),
         KeyCode::Backspace if state.has_config_filter() => state.clear_config_filter(),
         KeyCode::Down | KeyCode::Char('j') => state.move_config_category_by(1, true),
         KeyCode::Up | KeyCode::Char('k') => state.move_config_category_by(-1, true),
@@ -843,11 +1246,28 @@ fn handle_category_config_key(state: &mut AppState, key: KeyEvent) {
     }
 
     if state.keybinds.matches_quit(key) {
-        state.close_category_config();
+        state.close_settings();
     } else if state.keybinds.matches_category_filter(key) {
         state.start_config_filter();
     } else if state.keybinds.matches_reset_defaults(key) {
         state.reset_default_category_config();
+    }
+}
+
+fn handle_keybind_settings_key(state: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Enter => state.start_keybind_edit(),
+        KeyCode::Down | KeyCode::Char('j') => state.move_keybind_by(1, true),
+        KeyCode::Up | KeyCode::Char('k') => state.move_keybind_by(-1, true),
+        KeyCode::PageDown => state.move_keybind_by(4, false),
+        KeyCode::PageUp => state.move_keybind_by(-4, false),
+        _ => {}
+    }
+
+    if state.keybinds.matches_quit(key) {
+        state.close_settings();
+    } else if state.keybinds.matches_reset_defaults(key) {
+        state.reset_default_keybinds();
     }
 }
 
@@ -882,6 +1302,40 @@ fn handle_category_filter_key(state: &mut AppState, key: KeyEvent) {
     }
 }
 
+fn handle_article_sequence_key(state: &mut AppState, key: KeyEvent) -> bool {
+    let Some(ch) = key_sequence_part(key) else {
+        state.pending_key_sequence.clear();
+        return false;
+    };
+
+    let mut sequence = state.pending_key_sequence.clone();
+    sequence.push(ch);
+
+    if state.keybinds.matches_article_jump_top(&sequence) {
+        state.pending_key_sequence.clear();
+        state.jump_to_top();
+        return true;
+    }
+
+    if state.keybinds.matches_article_jump_bottom(&sequence) {
+        state.pending_key_sequence.clear();
+        state.jump_to_bottom();
+        return true;
+    }
+
+    if state.keybinds.has_article_sequence_prefix(&sequence) {
+        state.pending_key_sequence = sequence;
+        state.status = format!(
+            "Awaiting key sequence after {}",
+            key_sequence_label(&state.pending_key_sequence)
+        );
+        return true;
+    }
+
+    state.pending_key_sequence.clear();
+    false
+}
+
 fn find_category(categories: &[Category], requested: &str) -> Option<usize> {
     let requested = requested.trim().to_ascii_lowercase();
 
@@ -892,18 +1346,56 @@ fn find_category(categories: &[Category], requested: &str) -> Option<usize> {
     })
 }
 
-fn configured_key(value: &str, default: char) -> char {
-    let mut chars = value.chars();
-
-    match (chars.next(), chars.next()) {
-        (Some(key), None) if !key.is_control() => key,
-        _ => default,
+fn configured_key_sequence(value: &str, default: &str, allow_multi: bool) -> String {
+    let char_count = value.chars().count();
+    if valid_key_sequence(value) && (allow_multi || char_count == 1) {
+        value.to_owned()
+    } else {
+        default.to_owned()
     }
 }
 
-fn key_matches_char(key: KeyEvent, configured: char) -> bool {
-    matches!(key.code, KeyCode::Char(actual) if actual == configured)
-        && !key.modifiers.contains(KeyModifiers::CONTROL)
+fn key_matches_sequence(key: KeyEvent, configured: &str) -> bool {
+    let mut chars = configured.chars();
+    match (chars.next(), chars.next()) {
+        (Some(configured), None) => key_sequence_part(key) == Some(configured),
+        _ => false,
+    }
+}
+
+fn key_sequence_part(key: KeyEvent) -> Option<char> {
+    match key.code {
+        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => Some(ch),
+        _ => None,
+    }
+}
+
+fn valid_key_sequence(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(valid_key_sequence_char)
+}
+
+fn valid_key_sequence_char(key: char) -> bool {
+    !key.is_control()
+}
+
+fn key_sequences_conflict(existing: &str, proposed: &str) -> bool {
+    existing == proposed || existing.starts_with(proposed) || proposed.starts_with(existing)
+}
+
+fn key_sequence_label(sequence: &str) -> String {
+    if sequence == " " {
+        return "Space".to_owned();
+    }
+
+    if sequence.chars().all(|ch| !ch.is_whitespace()) {
+        return sequence.to_owned();
+    }
+
+    sequence
+        .chars()
+        .map(key_label)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn key_label(key: char) -> String {
@@ -911,6 +1403,22 @@ fn key_label(key: char) -> String {
         ' ' => "Space".to_owned(),
         _ => key.to_string(),
     }
+}
+
+fn summary_block_line_count(blocks: &[SummaryBlock]) -> usize {
+    blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| {
+            let spacer = usize::from(index > 0);
+            let lines = match block {
+                SummaryBlock::Heading { .. } | SummaryBlock::Paragraph(_) => 1,
+                SummaryBlock::List { items, .. } => items.len(),
+                SummaryBlock::Quote(text) => text.lines().count(),
+            };
+            spacer + lines
+        })
+        .sum()
 }
 
 fn load_settings() -> (Settings, Option<String>) {
@@ -1065,15 +1573,36 @@ mod tests {
             error: None,
             category_filter: String::new(),
             category_filter_active: false,
-            config_open: false,
+            settings_open: false,
+            settings_section: SettingsSection::Categories,
             config_selected_category: 0,
             config_filter: String::new(),
             config_filter_active: false,
+            selected_keybind: 0,
+            editing_keybind: None,
+            keybind_input: String::new(),
             help_open: false,
             detail_open: false,
             detail_scroll: 0,
+            pending_key_sequence: String::new(),
             should_quit: false,
         }
+    }
+
+    fn article(title: &str) -> Article {
+        Article {
+            id: uuid::Uuid::nil(),
+            title: title.to_owned(),
+            link: None,
+            summary: "First line.\nSecond line.".to_owned(),
+            summary_blocks: Vec::new(),
+            published_at: None,
+            categories: vec!["World".to_owned()],
+        }
+    }
+
+    fn key(ch: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)
     }
 
     #[test]
@@ -1245,7 +1774,7 @@ mod tests {
     }
 
     #[test]
-    fn category_settings_uses_stable_category_keys() {
+    fn current_settings_uses_stable_category_keys() {
         let mut state = state_with_categories(vec![
             category("World", "world.json"),
             category("Today in History", "today_in_history.json"),
@@ -1253,7 +1782,7 @@ mod tests {
         state.enabled_categories = vec![false, true];
 
         assert_eq!(
-            state.category_settings(),
+            state.current_settings(),
             Settings {
                 categories: CategorySettings {
                     enabled: vec!["todayinhistory".to_owned()]
@@ -1264,30 +1793,34 @@ mod tests {
     }
 
     #[test]
-    fn default_config_keybind_is_comma() {
-        assert_eq!(KeyBindings::default().config, ',');
+    fn default_settings_keybind_is_comma() {
+        assert_eq!(KeyBindings::default().settings, ",");
     }
 
     #[test]
     fn keybinds_use_configured_single_character_values() {
         let settings = KeyBindingSettings {
             help: "h".to_owned(),
-            config: ";".to_owned(),
+            settings: ";".to_owned(),
             category_filter: "f".to_owned(),
             refresh: "u".to_owned(),
             quit: "x".to_owned(),
             reset_defaults: "D".to_owned(),
+            jump_top: "tt".to_owned(),
+            jump_bottom: "B".to_owned(),
         };
 
         assert_eq!(
             KeyBindings::from_settings(&settings),
             KeyBindings {
-                help: 'h',
-                config: ';',
-                category_filter: 'f',
-                refresh: 'u',
-                quit: 'x',
-                reset_defaults: 'D',
+                help: "h".to_owned(),
+                settings: ";".to_owned(),
+                category_filter: "f".to_owned(),
+                refresh: "u".to_owned(),
+                quit: "x".to_owned(),
+                reset_defaults: "D".to_owned(),
+                jump_top: "tt".to_owned(),
+                jump_bottom: "B".to_owned(),
             }
         );
     }
@@ -1296,20 +1829,74 @@ mod tests {
     fn invalid_keybind_values_fall_back_to_defaults() {
         let settings = KeyBindingSettings {
             help: String::new(),
-            config: "two".to_owned(),
+            settings: "two".to_owned(),
             category_filter: "\n".to_owned(),
             refresh: "u".to_owned(),
             quit: "x".to_owned(),
             reset_defaults: "D".to_owned(),
+            jump_top: String::new(),
+            jump_bottom: "\n".to_owned(),
         };
 
         let keybinds = KeyBindings::from_settings(&settings);
 
-        assert_eq!(keybinds.help, '?');
-        assert_eq!(keybinds.config, ',');
-        assert_eq!(keybinds.category_filter, '/');
-        assert_eq!(keybinds.refresh, 'u');
-        assert_eq!(keybinds.quit, 'x');
-        assert_eq!(keybinds.reset_defaults, 'D');
+        assert_eq!(keybinds.help, "?");
+        assert_eq!(keybinds.settings, ",");
+        assert_eq!(keybinds.category_filter, "/");
+        assert_eq!(keybinds.refresh, "u");
+        assert_eq!(keybinds.quit, "x");
+        assert_eq!(keybinds.reset_defaults, "D");
+        assert_eq!(keybinds.jump_top, "gg");
+        assert_eq!(keybinds.jump_bottom, "G");
+    }
+
+    #[test]
+    fn keybind_conflict_detection_ignores_same_action() {
+        let keybinds = KeyBindings::default();
+
+        assert_eq!(
+            keybinds.conflicting_action(KeyBindingAction::Help, "q"),
+            Some(KeyBindingAction::Quit)
+        );
+        assert_eq!(
+            keybinds.conflicting_action(KeyBindingAction::Help, "?"),
+            None
+        );
+        assert_eq!(
+            keybinds.conflicting_action(KeyBindingAction::Settings, "g"),
+            Some(KeyBindingAction::JumpTop)
+        );
+    }
+
+    #[test]
+    fn article_sequence_jumps_to_first_and_last_article() {
+        let mut state = state_with_categories(categories());
+        state.focus = Focus::Articles;
+        state.articles = vec![article("One"), article("Two"), article("Three")];
+        state.selected_article = 1;
+
+        assert!(handle_article_sequence_key(&mut state, key('g')));
+        assert_eq!(state.selected_article, 1);
+        assert!(handle_article_sequence_key(&mut state, key('g')));
+        assert_eq!(state.selected_article, 0);
+
+        assert!(handle_article_sequence_key(&mut state, key('G')));
+        assert_eq!(state.selected_article, 2);
+    }
+
+    #[test]
+    fn article_sequence_jumps_within_detail_view() {
+        let mut state = state_with_categories(categories());
+        state.focus = Focus::Articles;
+        state.articles = vec![article("One")];
+        state.detail_open = true;
+        state.detail_scroll = 4;
+
+        assert!(handle_article_sequence_key(&mut state, key('g')));
+        assert!(handle_article_sequence_key(&mut state, key('g')));
+        assert_eq!(state.detail_scroll, 0);
+
+        assert!(handle_article_sequence_key(&mut state, key('G')));
+        assert!(state.detail_scroll > 0);
     }
 }
