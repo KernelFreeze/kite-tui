@@ -486,7 +486,7 @@ fn render_keybind_settings(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
 }
 
 fn render_theme_settings(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
-    let selector_height = if app.theme_dropdown_open { 6 } else { 2 };
+    let selector_height = if app.theme_dropdown_open { 7 } else { 4 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(selector_height), Constraint::Min(5)])
@@ -497,6 +497,17 @@ fn render_theme_settings(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
 }
 
 fn render_theme_mode_selector(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
+    let light_style = if app.light_theme_selected() {
+        settings_selected_style(&app.theme)
+    } else {
+        fg(app.theme.colors.text)
+    };
+    let dark_style = if app.dark_theme_selected() {
+        settings_selected_style(&app.theme)
+    } else {
+        fg(app.theme.colors.text)
+    };
+
     let mut lines = vec![Line::from(vec![
         Span::styled("Mode ", fg(app.theme.colors.text)),
         Span::styled(
@@ -526,6 +537,14 @@ fn render_theme_mode_selector(frame: &mut Frame<'_>, app: &AppState, area: Rect)
             )));
         }
     }
+    lines.push(Line::from(vec![
+        Span::styled("Light ", fg(app.theme.colors.text)),
+        Span::styled(format!(" {} ", app.light_theme_name()), light_style),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("Dark  ", fg(app.theme.colors.text)),
+        Span::styled(format!(" {} ", app.dark_theme_name()), dark_style),
+    ]));
 
     frame.render_widget(
         Paragraph::new(Text::from(lines)).block(Block::default().borders(Borders::BOTTOM)),
