@@ -56,3 +56,7 @@ reset_defaults = "d"
 jump_top = "gg"
 jump_bottom = "G"
 ```
+
+## License
+
+Kite TUI is distributed under the MIT License. See [LICENSE](LICENSE) for the full terms.
