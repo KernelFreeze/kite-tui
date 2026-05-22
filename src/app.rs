@@ -12,6 +12,7 @@ use crate::{
     error::{KiteError, Result},
     kagi::KagiClient,
     models::{Article, Category},
+    settings::{self, CategorySettings, Settings},
     ui,
 };
 
@@ -66,11 +67,11 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub async fn bootstrap(client: &KagiClient, initial_category: &str) -> Result<Self> {
+    pub async fn bootstrap(client: &KagiClient, initial_category: Option<&str>) -> Result<Self> {
         let categories = client.categories().await?;
-        let selected_category = find_category(&categories, initial_category)
-            .ok_or_else(|| KiteError::CategoryNotFound(initial_category.to_owned()))?;
-        let enabled_categories = default_enabled_categories(&categories, selected_category);
+        let (mut enabled_categories, settings_error) = load_enabled_categories(&categories);
+        let selected_category =
+            select_initial_category(&categories, &mut enabled_categories, initial_category)?;
 
         let mut state = Self {
             categories,
@@ -94,6 +95,9 @@ impl AppState {
         };
 
         state.load_selected_category(client).await;
+        if state.error.is_none() {
+            state.error = settings_error;
+        }
         Ok(state)
     }
 
@@ -421,14 +425,33 @@ impl AppState {
             format!("Hiding {category_name}")
         };
         self.sync_selected_category_to_filter();
+        self.persist_category_config();
     }
 
     fn reset_default_category_config(&mut self) {
-        self.enabled_categories =
-            default_enabled_categories(&self.categories, self.selected_category);
+        self.enabled_categories = default_enabled_categories(&self.categories);
         self.sync_selected_category_to_filter();
         self.sync_config_selected_category_to_filter();
         self.update_category_config_status();
+        self.persist_category_config();
+    }
+
+    fn persist_category_config(&mut self) {
+        if let Err(error) = self.category_settings().save() {
+            self.error = Some(error.to_string());
+        }
+    }
+
+    fn category_settings(&self) -> Settings {
+        Settings {
+            categories: CategorySettings {
+                enabled: self
+                    .enabled_category_indices()
+                    .into_iter()
+                    .filter_map(|index| self.categories.get(index).map(settings::category_key))
+                    .collect(),
+            },
+        }
     }
 
     fn move_category_by(&mut self, step: isize, wrap: bool) {
@@ -557,7 +580,7 @@ impl AppState {
 
 pub async fn run(args: Args) -> Result<()> {
     let client = KagiClient::new(args.base_url, Duration::from_secs(args.timeout_seconds))?;
-    let mut state = AppState::bootstrap(&client, &args.category).await?;
+    let mut state = AppState::bootstrap(&client, args.category.as_deref()).await?;
 
     terminal::enable_raw_mode()?;
     let _restore = TerminalRestore;
@@ -713,36 +736,93 @@ fn find_category(categories: &[Category], requested: &str) -> Option<usize> {
     })
 }
 
-fn default_enabled_categories(categories: &[Category], selected_category: usize) -> Vec<bool> {
-    categories
+fn load_enabled_categories(categories: &[Category]) -> (Vec<bool>, Option<String>) {
+    match Settings::load() {
+        Ok(settings) => {
+            let enabled_categories = enabled_categories_from_settings(categories, &settings)
+                .unwrap_or_else(|| default_enabled_categories(categories));
+            (enabled_categories, None)
+        }
+        Err(error) => (
+            default_enabled_categories(categories),
+            Some(error.to_string()),
+        ),
+    }
+}
+
+fn enabled_categories_from_settings(
+    categories: &[Category],
+    settings: &Settings,
+) -> Option<Vec<bool>> {
+    if settings.categories.enabled.is_empty() {
+        return None;
+    }
+
+    let enabled_categories = categories
         .iter()
-        .enumerate()
-        .map(|(index, category)| {
-            index == selected_category
-                || DEFAULT_ENABLED_CATEGORY_KEYS
-                    .iter()
-                    .any(|default| category_matches_default_key(category, default))
+        .map(|category| {
+            settings
+                .categories
+                .enabled
+                .iter()
+                .any(|key| settings::category_matches_key(category, key))
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    enabled_categories
+        .iter()
+        .any(|enabled| *enabled)
+        .then_some(enabled_categories)
+}
+
+fn select_initial_category(
+    categories: &[Category],
+    enabled_categories: &mut [bool],
+    requested: Option<&str>,
+) -> Result<usize> {
+    if let Some(requested) = requested {
+        let selected_category = find_category(categories, requested)
+            .ok_or_else(|| KiteError::CategoryNotFound(requested.to_owned()))?;
+        if let Some(enabled) = enabled_categories.get_mut(selected_category) {
+            *enabled = true;
+        }
+        return Ok(selected_category);
+    }
+
+    Ok(enabled_categories
+        .iter()
+        .position(|enabled| *enabled)
+        .unwrap_or(0))
+}
+
+fn default_enabled_categories(categories: &[Category]) -> Vec<bool> {
+    let mut enabled_categories = categories
+        .iter()
+        .map(|category| {
+            DEFAULT_ENABLED_CATEGORY_KEYS
+                .iter()
+                .any(|default| category_matches_default_key(category, default))
+        })
+        .collect::<Vec<_>>();
+
+    if !enabled_categories.iter().any(|enabled| *enabled)
+        && let Some(first_category) = enabled_categories.first_mut()
+    {
+        *first_category = true;
+    }
+
+    enabled_categories
 }
 
 fn category_matches_default_key(category: &Category, key: &str) -> bool {
-    let key = normalize_category_key(key);
+    let key = settings::normalize_category_key(key);
     [
         category.name.as_str(),
         category.file.as_str(),
         category.file_stem(),
     ]
     .into_iter()
-    .any(|value| normalize_category_key(value) == key)
-}
-
-fn normalize_category_key(value: &str) -> String {
-    value
-        .chars()
-        .filter(|character| character.is_ascii_alphanumeric())
-        .map(|character| character.to_ascii_lowercase())
-        .collect()
+    .any(|value| settings::normalize_category_key(value) == key)
 }
 
 fn category_matches_filter(category: &Category, filter: &str) -> bool {
@@ -885,7 +965,7 @@ mod tests {
             category("Climate Change", "climate_change.json"),
         ];
 
-        let enabled = default_enabled_categories(&categories, 0);
+        let enabled = default_enabled_categories(&categories);
         let enabled_names = categories
             .iter()
             .zip(enabled)
@@ -915,8 +995,11 @@ mod tests {
             category("Climate Change", "climate_change.json"),
         ];
 
-        let enabled = default_enabled_categories(&categories, 1);
+        let mut enabled = default_enabled_categories(&categories);
+        let selected_category =
+            select_initial_category(&categories, &mut enabled, Some("Climate Change")).unwrap();
 
+        assert_eq!(selected_category, 1);
         assert_eq!(enabled, vec![true, true]);
     }
 
@@ -928,5 +1011,49 @@ mod tests {
 
         assert!(state.is_category_enabled(0));
         assert_eq!(state.status, "At least one category must stay shown");
+    }
+
+    #[test]
+    fn saved_category_config_loads_matching_categories() {
+        let categories = vec![
+            category("World", "world.json"),
+            category("Technology", "technology.json"),
+            category("Today in History", "today_in_history.json"),
+        ];
+        let settings = Settings {
+            categories: CategorySettings {
+                enabled: vec!["technology".to_owned(), "todayinhistory".to_owned()],
+            },
+        };
+
+        let enabled = enabled_categories_from_settings(&categories, &settings).unwrap();
+
+        assert_eq!(enabled, vec![false, true, true]);
+    }
+
+    #[test]
+    fn empty_saved_category_config_falls_back_to_defaults() {
+        let categories = vec![category("World", "world.json")];
+        let settings = Settings::default();
+
+        assert!(enabled_categories_from_settings(&categories, &settings).is_none());
+    }
+
+    #[test]
+    fn category_settings_uses_stable_category_keys() {
+        let mut state = state_with_categories(vec![
+            category("World", "world.json"),
+            category("Today in History", "today_in_history.json"),
+        ]);
+        state.enabled_categories = vec![false, true];
+
+        assert_eq!(
+            state.category_settings(),
+            Settings {
+                categories: CategorySettings {
+                    enabled: vec!["todayinhistory".to_owned()]
+                }
+            }
+        );
     }
 }

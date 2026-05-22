@@ -12,13 +12,8 @@ pub struct Args {
     )]
     pub base_url: Url,
 
-    #[arg(
-        short,
-        long,
-        default_value = "World",
-        help = "Initial category name or file stem"
-    )]
-    pub category: String,
+    #[arg(short, long, help = "Initial category name or file stem")]
+    pub category: Option<String>,
 
     #[arg(long, default_value_t = 20, help = "HTTP timeout in seconds")]
     pub timeout_seconds: u64,
