@@ -13,16 +13,30 @@ const QUALIFIER: &str = "dev";
 const ORGANIZATION: &str = "CelesteLove";
 const APPLICATION: &str = "Kite";
 const SETTINGS_FILE: &str = "settings.toml";
+const THEMES_DIR: &str = "themes";
 
 pub type Result<T> = std::result::Result<T, SettingsError>;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
+    #[serde(default = "default_theme")]
+    pub theme: String,
+
     #[serde(default)]
     pub categories: CategorySettings,
 
     #[serde(default)]
     pub keybinds: KeyBindingSettings,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            theme: default_theme(),
+            categories: CategorySettings::default(),
+            keybinds: KeyBindingSettings::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +135,10 @@ pub fn settings_file() -> Result<PathBuf> {
     Ok(project_dirs()?.config_dir().join(SETTINGS_FILE))
 }
 
+pub fn themes_dir() -> Result<PathBuf> {
+    Ok(project_dirs()?.config_dir().join(THEMES_DIR))
+}
+
 pub fn category_key(category: &Category) -> String {
     normalize_category_key(category.file_stem())
 }
@@ -176,6 +194,10 @@ pub enum SettingsError {
 
 fn display_path(path: &Path) -> String {
     path.display().to_string()
+}
+
+fn default_theme() -> String {
+    "ansi".to_owned()
 }
 
 fn default_help_key() -> String {
@@ -255,6 +277,7 @@ mod tests {
     #[test]
     fn settings_round_trip_as_toml() {
         let settings = Settings {
+            theme: "ansi".to_owned(),
             categories: CategorySettings {
                 enabled: vec!["world".to_owned(), "technology".to_owned()],
             },
@@ -293,6 +316,20 @@ mod tests {
                 jump_bottom: "G".to_owned(),
             }
         );
+        assert_eq!(decoded.theme, "ansi");
+    }
+
+    #[test]
+    fn missing_theme_uses_default() {
+        let decoded = toml::from_str::<Settings>(
+            r#"
+            [keybinds]
+            help = "h"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(decoded.theme, "ansi");
     }
 
     #[test]

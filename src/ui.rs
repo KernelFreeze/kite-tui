@@ -10,6 +10,7 @@ use time::{OffsetDateTime, macros::format_description};
 use crate::{
     app::{AppState, Focus, KeyBindingAction, SettingsSection},
     models::{Article, SummaryBlock},
+    theme::Theme,
 };
 
 pub fn draw(frame: &mut Frame<'_>, app: &AppState) {
@@ -48,11 +49,11 @@ fn render_header(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
         Span::styled(
             "Kite",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(app.theme.colors.title)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled(category.to_owned(), Style::default().fg(Color::White)),
+        Span::styled(category.to_owned(), fg(app.theme.colors.text)),
     ]));
 
     frame.render_widget(header, area);
@@ -81,7 +82,7 @@ fn render_categories(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
             "No categories loaded."
         };
         frame.render_widget(
-            Paragraph::new(message).style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new(message).style(fg(app.theme.colors.muted)),
             area,
         );
         return;
@@ -117,7 +118,7 @@ fn category_tabs(app: &AppState, visible_categories: &[usize], width: u16) -> Te
         if index == app.selected_category {
             underlines.push(Span::styled(
                 "-".repeat(name_width),
-                Style::default().fg(Color::Yellow),
+                fg(app.theme.colors.accent),
             ));
         } else {
             underlines.push(Span::raw(" ".repeat(name_width)));
@@ -179,17 +180,17 @@ fn category_tabs_width(
 fn category_tab_style(app: &AppState, index: usize) -> Style {
     if index == app.selected_category {
         let color = if app.focus == Focus::Categories || app.category_filter_active {
-            Color::White
+            app.theme.colors.text
         } else {
-            Color::Gray
+            app.theme.colors.subtle
         };
         return Style::default().fg(color).add_modifier(Modifier::BOLD);
     }
 
     if Some(index) == app.loaded_category {
-        Style::default().fg(Color::Green)
+        fg(app.theme.colors.success)
     } else {
-        Style::default().fg(Color::DarkGray)
+        fg(app.theme.colors.muted)
     }
 }
 
@@ -204,7 +205,7 @@ fn render_articles(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
                 let selected = index == app.selected_article;
                 let read = app.is_article_read(article);
                 let style = if selected {
-                    Style::default().fg(Color::Black).bg(Color::Green)
+                    selected_style(&app.theme)
                 } else {
                     Style::default()
                 };
@@ -216,37 +217,40 @@ fn render_articles(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
                 ListItem::new(Line::from(vec![
                     Span::raw(if selected { ">" } else { " " }),
                     Span::raw(" "),
-                    Span::styled(date, Style::default().fg(Color::Yellow)),
+                    Span::styled(date, fg(app.theme.colors.accent)),
                     Span::raw(" "),
-                    Span::styled(article.title.clone(), article_title_style(selected, read)),
+                    Span::styled(
+                        article.title.clone(),
+                        article_title_style(&app.theme, selected, read),
+                    ),
                 ]))
                 .style(style)
             })
             .collect::<Vec<_>>()
     };
 
-    let block = focused_block("Articles", app.focus == Focus::Articles);
+    let block = focused_block("Articles", app.focus == Focus::Articles, &app.theme);
     let mut list_state = ListState::default();
     list_state.select((!app.articles.is_empty()).then_some(app.selected_article));
     frame.render_stateful_widget(List::new(items).block(block), area, &mut list_state);
 }
 
-fn article_title_style(selected: bool, read: bool) -> Style {
+fn article_title_style(theme: &Theme, selected: bool, read: bool) -> Style {
     match (selected, read) {
-        (_, true) => Style::default().fg(Color::DarkGray),
-        (true, false) => Style::default().fg(Color::Black),
-        (false, false) => Style::default().fg(Color::White),
+        (_, true) => fg(theme.colors.muted),
+        (true, false) => fg(theme.colors.selected_fg),
+        (false, false) => fg(theme.colors.text),
     }
 }
 
 fn render_article_detail(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     let lines = app
         .selected_article()
-        .map(article_detail)
+        .map(|article| article_detail(article, &app.theme))
         .unwrap_or_else(|| vec![Line::from("No article selected.")]);
 
     let paragraph = Paragraph::new(Text::from(lines))
-        .block(focused_block("Article", true))
+        .block(focused_block("Article", true, &app.theme))
         .wrap(Wrap { trim: false })
         .scroll((app.detail_scroll, 0));
 
@@ -257,7 +261,7 @@ fn render_settings_popup(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     let popup = centered_rect(88, 86, area);
     frame.render_widget(Clear, popup);
 
-    let block = focused_block("Settings", true);
+    let block = focused_block("Settings", true, &app.theme);
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
@@ -271,15 +275,20 @@ fn render_settings_popup(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     match app.settings_section {
         SettingsSection::Categories => render_category_settings(frame, app, chunks[1]),
         SettingsSection::Keybinds => render_keybind_settings(frame, app, chunks[1]),
+        SettingsSection::Themes => render_theme_settings(frame, app, chunks[1]),
     }
 }
 
 fn render_settings_tabs(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     let mut spans = Vec::new();
 
-    for (index, section) in [SettingsSection::Categories, SettingsSection::Keybinds]
-        .into_iter()
-        .enumerate()
+    for (index, section) in [
+        SettingsSection::Categories,
+        SettingsSection::Keybinds,
+        SettingsSection::Themes,
+    ]
+    .into_iter()
+    .enumerate()
     {
         if index > 0 {
             spans.push(Span::raw(" "));
@@ -287,12 +296,9 @@ fn render_settings_tabs(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
 
         let selected = app.settings_section == section;
         let style = if selected {
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
+            settings_selected_style(&app.theme).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::DarkGray)
+            fg(app.theme.colors.muted)
         };
         spans.push(Span::styled(format!(" {} ", section.title()), style));
     }
@@ -322,7 +328,7 @@ fn render_enabled_category_summary(frame: &mut Frame<'_>, app: &AppState, area: 
     let mut spans = vec![Span::styled(
         "Shown ",
         Style::default()
-            .fg(Color::White)
+            .fg(app.theme.colors.text)
             .add_modifier(Modifier::BOLD),
     )];
 
@@ -331,13 +337,13 @@ fn render_enabled_category_summary(frame: &mut Frame<'_>, app: &AppState, area: 
             spans.push(Span::raw(" "));
             spans.push(Span::styled(
                 format!(" {} ", category.name),
-                Style::default().fg(Color::Black).bg(Color::Cyan),
+                settings_selected_style(&app.theme),
             ));
         }
     }
 
     if app.enabled_category_count() == 0 {
-        spans.push(Span::styled(" none", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(" none", fg(app.theme.colors.muted)));
     }
 
     let paragraph = Paragraph::new(Line::from(spans))
@@ -348,11 +354,11 @@ fn render_enabled_category_summary(frame: &mut Frame<'_>, app: &AppState, area: 
 
 fn render_config_filter(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     let style = if app.config_filter_active {
-        Style::default().fg(Color::Cyan)
+        fg(app.theme.colors.focus)
     } else if app.has_config_filter() {
-        Style::default().fg(Color::White)
+        fg(app.theme.colors.text)
     } else {
-        Style::default().fg(Color::DarkGray)
+        fg(app.theme.colors.muted)
     };
     let value = if app.has_config_filter() {
         app.config_filter.clone()
@@ -361,7 +367,7 @@ fn render_config_filter(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     };
 
     let paragraph = Paragraph::new(Line::from(vec![
-        Span::styled("Search ", Style::default().fg(Color::White)),
+        Span::styled("Search ", fg(app.theme.colors.text)),
         Span::styled(value, style),
     ]))
     .block(Block::default().borders(Borders::BOTTOM));
@@ -380,9 +386,9 @@ fn render_config_category_list(frame: &mut Frame<'_>, app: &AppState, area: Rect
                     let selected = *index == app.config_selected_category;
                     let enabled = app.is_category_enabled(*index);
                     let style = if selected {
-                        Style::default().fg(Color::Black).bg(Color::Cyan)
+                        settings_selected_style(&app.theme)
                     } else if enabled {
-                        Style::default().fg(Color::Green)
+                        fg(app.theme.colors.success)
                     } else {
                         Style::default()
                     };
@@ -418,6 +424,7 @@ fn render_config_category_list(frame: &mut Frame<'_>, app: &AppState, area: Rect
         List::new(items).block(focused_block(
             title,
             app.settings_section == SettingsSection::Categories,
+            &app.theme,
         )),
         area,
         &mut list_state,
@@ -432,23 +439,17 @@ fn render_keybind_settings(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
             let selected = index == app.selected_keybind;
             let editing = app.editing_keybind == Some(action);
             let style = if editing {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+                editing_style(&app.theme).add_modifier(Modifier::BOLD)
             } else if selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
+                settings_selected_style(&app.theme)
             } else {
                 Style::default()
             };
             let marker = if selected { ">" } else { " " };
             let key_style = if editing {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+                editing_style(&app.theme).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Yellow)
+                fg(app.theme.colors.accent)
             };
             let key_label = if editing {
                 if app.keybind_input.is_empty() {
@@ -477,6 +478,51 @@ fn render_keybind_settings(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
         List::new(items).block(focused_block(
             "Keybinds",
             app.settings_section == SettingsSection::Keybinds,
+            &app.theme,
+        )),
+        area,
+        &mut list_state,
+    );
+}
+
+fn render_theme_settings(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
+    let items = app
+        .themes
+        .themes()
+        .iter()
+        .enumerate()
+        .map(|(index, theme)| {
+            let selected = index == app.selected_theme;
+            let active = theme.id == app.theme.id;
+            let style = if selected {
+                settings_selected_style(&app.theme)
+            } else if active {
+                fg(app.theme.colors.success)
+            } else {
+                Style::default()
+            };
+            let marker = if selected { ">" } else { " " };
+            let checkbox = if active { "[x]" } else { "[ ]" };
+
+            ListItem::new(Line::from(vec![
+                Span::raw(marker),
+                Span::raw(" "),
+                Span::raw(checkbox),
+                Span::raw(" "),
+                Span::raw(format!("{:<22}", theme.name)),
+                Span::raw(theme.id.clone()),
+            ]))
+            .style(style)
+        })
+        .collect::<Vec<_>>();
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(app.selected_theme));
+    frame.render_stateful_widget(
+        List::new(items).block(focused_block(
+            "Themes",
+            app.settings_section == SettingsSection::Themes,
+            &app.theme,
         )),
         area,
         &mut list_state,
@@ -488,26 +534,38 @@ fn render_help_popup(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     frame.render_widget(Clear, popup);
 
     let lines = vec![
-        help_line(app.keybinds.help_label(), "Open help"),
-        help_line(app.keybinds.settings_label(), "Open settings"),
-        help_line(app.keybinds.category_filter_label(), "Filter categories"),
-        help_line(app.keybinds.refresh_label(), "Refresh category"),
-        help_line(app.keybinds.refresh_all_label(), "Refresh all categories"),
-        help_line(app.keybinds.quit_label(), "Quit or close popup"),
+        help_line(&app.theme, app.keybinds.help_label(), "Open help"),
+        help_line(&app.theme, app.keybinds.settings_label(), "Open settings"),
         help_line(
+            &app.theme,
+            app.keybinds.category_filter_label(),
+            "Filter categories",
+        ),
+        help_line(&app.theme, app.keybinds.refresh_label(), "Refresh category"),
+        help_line(
+            &app.theme,
+            app.keybinds.refresh_all_label(),
+            "Refresh all categories",
+        ),
+        help_line(&app.theme, app.keybinds.quit_label(), "Quit or close popup"),
+        help_line(
+            &app.theme,
             app.keybinds.reset_defaults_label(),
             "Restore defaults in settings",
         ),
         help_line(
+            &app.theme,
             app.keybinds.action_label(KeyBindingAction::JumpTop),
             "First article or article top",
         ),
         help_line(
+            &app.theme,
             app.keybinds.action_label(KeyBindingAction::JumpBottom),
             "Last article or article bottom",
         ),
         Line::from(""),
         help_line(
+            &app.theme,
             format!(
                 "{}/{}",
                 app.keybinds.next_category_label(),
@@ -515,27 +573,35 @@ fn render_help_popup(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
             ),
             "Next or previous category",
         ),
-        help_line("Left/Right", "Switch settings section"),
-        help_line("Enter", "Load category, open article, or edit keybind"),
-        help_line("Esc", "Close popup or clear filter"),
-        help_line("j/k, arrows", "Move selection"),
-        help_line("PageUp/PageDown", "Move by page"),
-        help_line("Space", "Toggle category in settings"),
+        help_line(&app.theme, "Left/Right", "Switch settings section"),
+        help_line(
+            &app.theme,
+            "Enter",
+            "Load category, open article, edit keybind, or select theme",
+        ),
+        help_line(&app.theme, "Esc", "Close popup or clear filter"),
+        help_line(&app.theme, "j/k, arrows", "Move selection"),
+        help_line(&app.theme, "PageUp/PageDown", "Move by page"),
+        help_line(&app.theme, "Space", "Toggle category or select theme"),
     ];
 
     let paragraph = Paragraph::new(Text::from(lines))
-        .block(focused_block("Help", true))
+        .block(focused_block("Help", true, &app.theme))
         .wrap(Wrap { trim: false });
 
     frame.render_widget(paragraph, popup);
 }
 
-fn help_line(key: impl Into<String>, description: impl Into<String>) -> Line<'static> {
+fn help_line(
+    theme: &Theme,
+    key: impl Into<String>,
+    description: impl Into<String>,
+) -> Line<'static> {
     Line::from(vec![
         Span::styled(
             format!("{:<16}", key.into()),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme.colors.accent)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(description.into()),
@@ -577,22 +643,22 @@ fn render_status(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     let help = format!("{} help", app.keybinds.help_label());
     let status = app.error.as_deref().unwrap_or(&app.status);
     let paragraph = Paragraph::new(Line::from(vec![
-        Span::styled(focus, Style::default().fg(Color::Magenta)),
+        Span::styled(focus, fg(app.theme.colors.status)),
         Span::raw(" | "),
         Span::raw(status.to_owned()),
         Span::raw(" | "),
-        Span::styled(help, Style::default().fg(Color::DarkGray)),
+        Span::styled(help, fg(app.theme.colors.muted)),
     ]));
 
     frame.render_widget(paragraph, area);
 }
 
-fn article_detail(article: &Article) -> Vec<Line<'static>> {
+fn article_detail(article: &Article, theme: &Theme) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(Span::styled(
             article.title.clone(),
             Style::default()
-                .fg(Color::White)
+                .fg(theme.colors.text)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(format!(
@@ -614,21 +680,21 @@ fn article_detail(article: &Article) -> Vec<Line<'static>> {
                 .map(|line| Line::from(line.to_owned())),
         );
     } else {
-        append_summary_blocks(&mut lines, &article.summary_blocks);
+        append_summary_blocks(&mut lines, &article.summary_blocks, theme);
     }
 
     if let Some(link) = &article.link {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             link.as_str().to_owned(),
-            Style::default().fg(Color::Cyan),
+            fg(theme.colors.link),
         )));
     }
 
     lines
 }
 
-fn append_summary_blocks(lines: &mut Vec<Line<'static>>, blocks: &[SummaryBlock]) {
+fn append_summary_blocks(lines: &mut Vec<Line<'static>>, blocks: &[SummaryBlock], theme: &Theme) {
     for (index, block) in blocks.iter().enumerate() {
         if index > 0 {
             lines.push(Line::from(""));
@@ -637,9 +703,9 @@ fn append_summary_blocks(lines: &mut Vec<Line<'static>>, blocks: &[SummaryBlock]
         match block {
             SummaryBlock::Heading { level, text } => {
                 let color = if *level <= 2 {
-                    Color::Cyan
+                    theme.colors.title
                 } else {
-                    Color::Yellow
+                    theme.colors.accent
                 };
                 lines.push(Line::from(Span::styled(
                     text.clone(),
@@ -657,7 +723,7 @@ fn append_summary_blocks(lines: &mut Vec<Line<'static>>, blocks: &[SummaryBlock]
                         "- ".to_owned()
                     };
                     lines.push(Line::from(vec![
-                        Span::styled(marker, Style::default().fg(Color::Yellow)),
+                        Span::styled(marker, fg(theme.colors.accent)),
                         Span::raw(item.clone()),
                     ]));
                 }
@@ -665,8 +731,8 @@ fn append_summary_blocks(lines: &mut Vec<Line<'static>>, blocks: &[SummaryBlock]
             SummaryBlock::Quote(text) => {
                 for line in text.lines() {
                     lines.push(Line::from(vec![
-                        Span::styled("> ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(line.to_owned(), Style::default().fg(Color::Gray)),
+                        Span::styled("> ", fg(theme.colors.muted)),
+                        Span::styled(line.to_owned(), fg(theme.colors.subtle)),
                     ]));
                 }
             }
@@ -674,17 +740,39 @@ fn append_summary_blocks(lines: &mut Vec<Line<'static>>, blocks: &[SummaryBlock]
     }
 }
 
-fn focused_block(title: impl Into<String>, focused: bool) -> Block<'static> {
+fn focused_block(title: impl Into<String>, focused: bool, theme: &Theme) -> Block<'static> {
     let style = if focused {
-        Style::default().fg(Color::Cyan)
+        fg(theme.colors.focus)
     } else {
-        Style::default().fg(Color::DarkGray)
+        fg(theme.colors.border)
     };
 
     Block::default()
         .borders(Borders::ALL)
         .border_style(style)
         .title(title.into())
+}
+
+fn fg(color: Color) -> Style {
+    Style::default().fg(color)
+}
+
+fn selected_style(theme: &Theme) -> Style {
+    Style::default()
+        .fg(theme.colors.selected_fg)
+        .bg(theme.colors.selected_bg)
+}
+
+fn settings_selected_style(theme: &Theme) -> Style {
+    Style::default()
+        .fg(theme.colors.selected_fg)
+        .bg(theme.colors.settings_selected_bg)
+}
+
+fn editing_style(theme: &Theme) -> Style {
+    Style::default()
+        .fg(theme.colors.selected_fg)
+        .bg(theme.colors.editing_bg)
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

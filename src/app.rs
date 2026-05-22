@@ -14,6 +14,7 @@ use crate::{
     models::{Article, Category, SummaryBlock},
     read_state::ReadArticles,
     settings::{self, CategorySettings, KeyBindingSettings, Settings},
+    theme::{ANSI_THEME_ID, Theme, ThemeCatalog},
     ui,
 };
 
@@ -42,20 +43,23 @@ pub enum Focus {
 pub enum SettingsSection {
     Categories,
     Keybinds,
+    Themes,
 }
 
 impl SettingsSection {
     fn next(self) -> Self {
         match self {
             Self::Categories => Self::Keybinds,
-            Self::Keybinds => Self::Categories,
+            Self::Keybinds => Self::Themes,
+            Self::Themes => Self::Categories,
         }
     }
 
     fn previous(self) -> Self {
         match self {
-            Self::Categories => Self::Keybinds,
+            Self::Categories => Self::Themes,
             Self::Keybinds => Self::Categories,
+            Self::Themes => Self::Keybinds,
         }
     }
 
@@ -63,6 +67,7 @@ impl SettingsSection {
         match self {
             Self::Categories => "Categories",
             Self::Keybinds => "Keybinds",
+            Self::Themes => "Themes",
         }
     }
 }
@@ -363,6 +368,8 @@ pub struct AppState {
     pub categories: Vec<Category>,
     pub enabled_categories: Vec<bool>,
     pub keybinds: KeyBindings,
+    pub theme: Theme,
+    pub themes: ThemeCatalog,
     pub selected_category: usize,
     pub loaded_category: Option<usize>,
     pub articles: Vec<Article>,
@@ -381,6 +388,7 @@ pub struct AppState {
     pub selected_keybind: usize,
     pub editing_keybind: Option<KeyBindingAction>,
     pub keybind_input: String,
+    pub selected_theme: usize,
     pub help_open: bool,
     pub detail_open: bool,
     pub detail_scroll: u16,
@@ -393,6 +401,11 @@ impl AppState {
         let categories = client.categories().await?;
         let (settings, settings_error) = load_settings();
         let (read_articles, read_articles_error) = load_read_articles();
+        let (themes, mut theme_errors) = ThemeCatalog::load();
+        let (theme, selected_theme, theme_error) = themes.selected_theme(&settings.theme);
+        if let Some(error) = theme_error {
+            theme_errors.push(error);
+        }
         let mut enabled_categories = enabled_categories_from_settings(&categories, &settings)
             .unwrap_or_else(|| default_enabled_categories(&categories));
         let keybinds = KeyBindings::from_settings(&settings.keybinds);
@@ -403,6 +416,8 @@ impl AppState {
             categories,
             enabled_categories,
             keybinds,
+            theme,
+            themes,
             selected_category,
             loaded_category: None,
             articles: Vec::new(),
@@ -421,6 +436,7 @@ impl AppState {
             selected_keybind: 0,
             editing_keybind: None,
             keybind_input: String::new(),
+            selected_theme,
             help_open: false,
             detail_open: false,
             detail_scroll: 0,
@@ -430,7 +446,7 @@ impl AppState {
 
         state.load_selected_category(client).await;
         if state.error.is_none() {
-            state.error = startup_error(settings_error, read_articles_error);
+            state.error = startup_error(settings_error, read_articles_error, theme_errors);
         }
         Ok(state)
     }
@@ -675,6 +691,7 @@ impl AppState {
         self.settings_open = true;
         self.settings_section = SettingsSection::Categories;
         self.config_selected_category = self.selected_category;
+        self.sync_selected_theme();
         self.config_filter_active = false;
         self.editing_keybind = None;
         self.keybind_input.clear();
@@ -797,6 +814,7 @@ impl AppState {
         match self.settings_section {
             SettingsSection::Categories => self.update_category_config_status(),
             SettingsSection::Keybinds => self.update_keybind_settings_status(),
+            SettingsSection::Themes => self.update_theme_settings_status(),
         }
     }
 
@@ -985,6 +1003,64 @@ impl AppState {
         self.persist_settings();
     }
 
+    fn update_theme_settings_status(&mut self) {
+        if let Some(theme) = self.themes.themes().get(self.selected_theme) {
+            let marker = if theme.id == self.theme.id {
+                "current"
+            } else {
+                "available"
+            };
+            self.status = format!("Selected {} ({marker})", theme.name);
+        } else {
+            self.status = "No themes available".to_owned();
+        }
+    }
+
+    fn move_theme_by(&mut self, step: isize, wrap: bool) {
+        let len = self.themes.themes().len();
+        if len == 0 {
+            self.update_theme_settings_status();
+            return;
+        }
+
+        let current = self.selected_theme.min(len.saturating_sub(1)) as isize;
+        let last = len as isize - 1;
+        let next = if wrap {
+            (current + step).rem_euclid(len as isize)
+        } else {
+            (current + step).clamp(0, last)
+        };
+
+        self.selected_theme = next as usize;
+        self.update_theme_settings_status();
+    }
+
+    fn select_theme(&mut self) {
+        let Some(theme) = self.themes.themes().get(self.selected_theme).cloned() else {
+            self.status = "No themes available".to_owned();
+            return;
+        };
+
+        self.theme = theme;
+        self.status = format!("Theme set to {}", self.theme.name);
+        self.persist_settings();
+    }
+
+    fn reset_default_theme(&mut self) {
+        let (theme, index) = self.themes.default_theme();
+        self.theme = theme;
+        self.selected_theme = index;
+        self.status = "Theme restored to ANSI".to_owned();
+        self.persist_settings();
+    }
+
+    fn sync_selected_theme(&mut self) {
+        self.selected_theme = self
+            .themes
+            .index_of(&self.theme.id)
+            .unwrap_or_else(|| self.themes.index_of(ANSI_THEME_ID).unwrap_or(0));
+    }
+
     fn selected_keybind_action(&self) -> Option<KeyBindingAction> {
         KeyBindingAction::ALL.get(self.selected_keybind).copied()
     }
@@ -997,6 +1073,7 @@ impl AppState {
 
     fn current_settings(&self) -> Settings {
         Settings {
+            theme: self.theme.id.clone(),
             categories: CategorySettings {
                 enabled: self
                     .enabled_category_indices()
@@ -1404,6 +1481,7 @@ fn handle_settings_key(state: &mut AppState, key: KeyEvent) {
         _ => match state.settings_section {
             SettingsSection::Categories => handle_category_settings_key(state, key),
             SettingsSection::Keybinds => handle_keybind_settings_key(state, key),
+            SettingsSection::Themes => handle_theme_settings_key(state, key),
         },
     }
 }
@@ -1443,6 +1521,23 @@ fn handle_keybind_settings_key(state: &mut AppState, key: KeyEvent) {
         state.close_settings();
     } else if state.keybinds.matches_reset_defaults(key) {
         state.reset_default_keybinds();
+    }
+}
+
+fn handle_theme_settings_key(state: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Enter | KeyCode::Char(' ') => state.select_theme(),
+        KeyCode::Down | KeyCode::Char('j') => state.move_theme_by(1, true),
+        KeyCode::Up | KeyCode::Char('k') => state.move_theme_by(-1, true),
+        KeyCode::PageDown => state.move_theme_by(4, false),
+        KeyCode::PageUp => state.move_theme_by(-4, false),
+        _ => {}
+    }
+
+    if state.keybinds.matches_quit(key) {
+        state.close_settings();
+    } else if state.keybinds.matches_reset_defaults(key) {
+        state.reset_default_theme();
     }
 }
 
@@ -1676,11 +1771,13 @@ fn load_read_articles() -> (ReadArticles, Option<String>) {
 fn startup_error(
     settings_error: Option<String>,
     read_articles_error: Option<String>,
+    theme_errors: Vec<String>,
 ) -> Option<String> {
-    let errors = [settings_error, read_articles_error]
+    let mut errors = [settings_error, read_articles_error]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
+    errors.extend(theme_errors);
 
     (!errors.is_empty()).then(|| errors.join("; "))
 }
@@ -1821,6 +1918,8 @@ mod tests {
             enabled_categories: vec![true; categories.len()],
             categories,
             keybinds: KeyBindings::default(),
+            theme: Theme::ansi(),
+            themes: ThemeCatalog::built_in(),
             selected_category: 0,
             loaded_category: Some(0),
             articles: Vec::new(),
@@ -1839,6 +1938,7 @@ mod tests {
             selected_keybind: 0,
             editing_keybind: None,
             keybind_input: String::new(),
+            selected_theme: 0,
             help_open: false,
             detail_open: false,
             detail_scroll: 0,
@@ -2061,12 +2161,59 @@ mod tests {
         assert_eq!(
             state.current_settings(),
             Settings {
+                theme: "ansi".to_owned(),
                 categories: CategorySettings {
                     enabled: vec!["todayinhistory".to_owned()]
                 },
                 keybinds: KeyBindingSettings::default(),
             }
         );
+    }
+
+    #[test]
+    fn current_settings_persists_selected_theme() {
+        let mut state = state_with_categories(categories());
+        let theme = state
+            .themes
+            .themes()
+            .iter()
+            .find(|theme| theme.id == "dracula")
+            .unwrap()
+            .clone();
+
+        state.theme = theme;
+
+        assert_eq!(state.current_settings().theme, "dracula");
+    }
+
+    #[test]
+    fn settings_sections_cycle_through_themes() {
+        assert_eq!(
+            SettingsSection::Categories.next(),
+            SettingsSection::Keybinds
+        );
+        assert_eq!(SettingsSection::Keybinds.next(), SettingsSection::Themes);
+        assert_eq!(SettingsSection::Themes.next(), SettingsSection::Categories);
+        assert_eq!(
+            SettingsSection::Categories.previous(),
+            SettingsSection::Themes
+        );
+    }
+
+    #[test]
+    fn theme_settings_navigation_moves_through_available_themes() {
+        let mut state = state_with_categories(categories());
+        state.settings_section = SettingsSection::Themes;
+
+        state.move_theme_by(1, true);
+
+        assert_eq!(state.selected_theme, 1);
+        assert_eq!(state.status, "Selected Catppuccin Mocha (available)");
+
+        state.move_theme_by(-1, true);
+
+        assert_eq!(state.selected_theme, 0);
+        assert_eq!(state.status, "Selected ANSI (current)");
     }
 
     #[test]
