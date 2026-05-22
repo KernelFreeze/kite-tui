@@ -1,6 +1,7 @@
 use std::{cmp::Reverse, time::Duration};
 
 use feed_rs::{model::Entry, parser};
+use scraper::{ElementRef, Html, Node};
 use serde::Deserialize;
 use time::OffsetDateTime;
 use tracing::{debug, instrument};
@@ -9,7 +10,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{KiteError, Result},
-    models::{Article, Category},
+    models::{Article, Category, SummaryBlock},
 };
 
 const INDEX_FILE: &str = "kite.json";
@@ -178,12 +179,42 @@ pub fn article_from_entry(category: &Category, entry: &Entry) -> Article {
         title,
         link,
         summary: html_to_text(summary_html),
+        summary_blocks: html_to_summary_blocks(summary_html),
         published_at: entry.published.or(entry.updated).and_then(|published| {
             let nanos = i128::from(published.timestamp()) * 1_000_000_000
                 + i128::from(published.timestamp_subsec_nanos());
             OffsetDateTime::from_unix_timestamp_nanos(nanos).ok()
         }),
         categories,
+    }
+}
+
+pub fn html_to_summary_blocks(input: &str) -> Vec<SummaryBlock> {
+    let fragment = Html::parse_fragment(input);
+    let root = fragment.root_element();
+    let container = fragment
+        .root_element()
+        .descendent_elements()
+        .find(|element| element.value().name() == "body")
+        .unwrap_or(root);
+
+    let mut blocks = Vec::new();
+    for child in container.children() {
+        match child.value() {
+            Node::Text(text) => push_paragraph(&mut blocks, text),
+            Node::Element(_) => {
+                if let Some(element) = ElementRef::wrap(child) {
+                    push_element_blocks(element, &mut blocks);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if blocks.is_empty() {
+        text_fallback_blocks(input)
+    } else {
+        blocks
     }
 }
 
@@ -222,6 +253,87 @@ pub fn html_to_text(input: &str) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn push_element_blocks(element: ElementRef<'_>, blocks: &mut Vec<SummaryBlock>) {
+    let name = element.value().name();
+    match name {
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+            let text = element_text(element);
+            if !text.is_empty() {
+                let level = name
+                    .strip_prefix('h')
+                    .and_then(|level| level.parse::<u8>().ok())
+                    .unwrap_or(3);
+                blocks.push(SummaryBlock::Heading { level, text });
+            }
+        }
+        "p" => {
+            push_paragraph(blocks, &element_text(element));
+        }
+        "ul" | "ol" => {
+            let items = element
+                .child_elements()
+                .filter(|child| child.value().name() == "li")
+                .map(element_text)
+                .filter(|item| !item.is_empty())
+                .collect::<Vec<_>>();
+
+            if !items.is_empty() {
+                blocks.push(SummaryBlock::List {
+                    ordered: name == "ol",
+                    items,
+                });
+            }
+        }
+        "blockquote" => {
+            let text = element_text(element);
+            if !text.is_empty() {
+                blocks.push(SummaryBlock::Quote(text));
+            }
+        }
+        "br" => {}
+        "article" | "div" | "main" | "section" => {
+            let block_count = blocks.len();
+            for child in element.children() {
+                match child.value() {
+                    Node::Text(text) => push_paragraph(blocks, text),
+                    Node::Element(_) => {
+                        if let Some(element) = ElementRef::wrap(child) {
+                            push_element_blocks(element, blocks);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if blocks.len() == block_count {
+                push_paragraph(blocks, &element_text(element));
+            }
+        }
+        _ => {
+            push_paragraph(blocks, &element_text(element));
+        }
+    }
+}
+
+fn text_fallback_blocks(input: &str) -> Vec<SummaryBlock> {
+    html_to_text(input)
+        .lines()
+        .map(str::to_owned)
+        .map(SummaryBlock::Paragraph)
+        .collect()
+}
+
+fn push_paragraph(blocks: &mut Vec<SummaryBlock>, text: &str) {
+    let text = collapse_whitespace(text);
+    if !text.is_empty() {
+        blocks.push(SummaryBlock::Paragraph(text));
+    }
+}
+
+fn element_text(element: ElementRef<'_>) -> String {
+    collapse_whitespace(&element.text().collect::<String>())
 }
 
 fn primary_link(entry: &Entry) -> Option<&str> {
@@ -355,6 +467,20 @@ mod tests {
         );
         assert!(article.summary.contains("First paragraph."));
         assert!(article.summary.contains("Sources:"));
+        assert_eq!(
+            article.summary_blocks,
+            vec![
+                SummaryBlock::Paragraph("First paragraph.".to_owned()),
+                SummaryBlock::Heading {
+                    level: 3,
+                    text: "Sources:".to_owned()
+                },
+                SummaryBlock::List {
+                    ordered: false,
+                    items: vec!["Example - example.com".to_owned()]
+                }
+            ]
+        );
         assert_eq!(article.categories, ["World/Science"]);
         assert!(article.published_at.is_some());
     }
@@ -364,6 +490,35 @@ mod tests {
         assert_eq!(
             html_to_text("<p>Hello&nbsp;there.</p><br><ul><li>One &amp; two</li></ul>"),
             "Hello there.\nOne & two"
+        );
+    }
+
+    #[test]
+    fn parses_summary_html_into_structured_blocks() {
+        assert_eq!(
+            html_to_summary_blocks(
+                r#"
+                <h2>What happened</h2>
+                <p>First&nbsp;<strong>paragraph</strong>.</p>
+                <ol>
+                    <li>One &amp; two</li>
+                    <li>Three</li>
+                </ol>
+                <blockquote>Quoted&nbsp;text.</blockquote>
+                "#
+            ),
+            vec![
+                SummaryBlock::Heading {
+                    level: 2,
+                    text: "What happened".to_owned(),
+                },
+                SummaryBlock::Paragraph("First paragraph.".to_owned()),
+                SummaryBlock::List {
+                    ordered: true,
+                    items: vec!["One & two".to_owned(), "Three".to_owned()],
+                },
+                SummaryBlock::Quote("Quoted text.".to_owned()),
+            ]
         );
     }
 }

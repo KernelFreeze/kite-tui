@@ -9,7 +9,7 @@ use time::{OffsetDateTime, macros::format_description};
 
 use crate::{
     app::{AppState, Focus},
-    models::Article,
+    models::{Article, SummaryBlock},
 };
 
 pub fn draw(frame: &mut Frame<'_>, app: &AppState) {
@@ -459,12 +459,16 @@ fn article_detail(article: &Article) -> Vec<Line<'static>> {
         Line::from(""),
     ];
 
-    lines.extend(
-        article
-            .summary
-            .lines()
-            .map(|line| Line::from(line.to_owned())),
-    );
+    if article.summary_blocks.is_empty() {
+        lines.extend(
+            article
+                .summary
+                .lines()
+                .map(|line| Line::from(line.to_owned())),
+        );
+    } else {
+        append_summary_blocks(&mut lines, &article.summary_blocks);
+    }
 
     if let Some(link) = &article.link {
         lines.push(Line::from(""));
@@ -475,6 +479,52 @@ fn article_detail(article: &Article) -> Vec<Line<'static>> {
     }
 
     lines
+}
+
+fn append_summary_blocks(lines: &mut Vec<Line<'static>>, blocks: &[SummaryBlock]) {
+    for (index, block) in blocks.iter().enumerate() {
+        if index > 0 {
+            lines.push(Line::from(""));
+        }
+
+        match block {
+            SummaryBlock::Heading { level, text } => {
+                let color = if *level <= 2 {
+                    Color::Cyan
+                } else {
+                    Color::Yellow
+                };
+                lines.push(Line::from(Span::styled(
+                    text.clone(),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                )));
+            }
+            SummaryBlock::Paragraph(text) => {
+                lines.push(Line::from(text.clone()));
+            }
+            SummaryBlock::List { ordered, items } => {
+                for (index, item) in items.iter().enumerate() {
+                    let marker = if *ordered {
+                        format!("{}. ", index + 1)
+                    } else {
+                        "- ".to_owned()
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled(marker, Style::default().fg(Color::Yellow)),
+                        Span::raw(item.clone()),
+                    ]));
+                }
+            }
+            SummaryBlock::Quote(text) => {
+                for line in text.lines() {
+                    lines.push(Line::from(vec![
+                        Span::styled("> ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(line.to_owned(), Style::default().fg(Color::Gray)),
+                    ]));
+                }
+            }
+        }
+    }
 }
 
 fn focused_block(title: impl Into<String>, focused: bool) -> Block<'static> {
