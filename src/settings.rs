@@ -51,6 +51,9 @@ pub struct KeyBindingSettings {
     #[serde(default = "default_refresh_key")]
     pub refresh: String,
 
+    #[serde(default = "default_refresh_all_key")]
+    pub refresh_all: String,
+
     #[serde(default = "default_quit_key")]
     pub quit: String,
 
@@ -73,6 +76,7 @@ impl Default for KeyBindingSettings {
             next_category: default_next_category_key(),
             previous_category: default_previous_category_key(),
             refresh: default_refresh_key(),
+            refresh_all: default_refresh_all_key(),
             quit: default_quit_key(),
             reset_defaults: default_reset_defaults_key(),
             jump_top: default_jump_top_key(),
@@ -198,6 +202,10 @@ fn default_refresh_key() -> String {
     "r".to_owned()
 }
 
+fn default_refresh_all_key() -> String {
+    "R".to_owned()
+}
+
 fn default_quit_key() -> String {
     "q".to_owned()
 }
@@ -278,6 +286,7 @@ mod tests {
                 next_category: "tab".to_owned(),
                 previous_category: "shift+tab".to_owned(),
                 refresh: "r".to_owned(),
+                refresh_all: "R".to_owned(),
                 quit: "q".to_owned(),
                 reset_defaults: "d".to_owned(),
                 jump_top: "gg".to_owned(),

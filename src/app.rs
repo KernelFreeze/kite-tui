@@ -75,6 +75,7 @@ pub enum KeyBindingAction {
     NextCategory,
     PreviousCategory,
     Refresh,
+    RefreshAll,
     Quit,
     ResetDefaults,
     JumpTop,
@@ -82,13 +83,14 @@ pub enum KeyBindingAction {
 }
 
 impl KeyBindingAction {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Help,
         Self::Settings,
         Self::CategoryFilter,
         Self::NextCategory,
         Self::PreviousCategory,
         Self::Refresh,
+        Self::RefreshAll,
         Self::Quit,
         Self::ResetDefaults,
         Self::JumpTop,
@@ -103,6 +105,7 @@ impl KeyBindingAction {
             Self::NextCategory => "Next category",
             Self::PreviousCategory => "Previous category",
             Self::Refresh => "Refresh",
+            Self::RefreshAll => "Refresh all",
             Self::Quit => "Quit",
             Self::ResetDefaults => "Restore defaults",
             Self::JumpTop => "Jump to top",
@@ -118,6 +121,7 @@ impl KeyBindingAction {
             Self::NextCategory => "Load next category",
             Self::PreviousCategory => "Load previous category",
             Self::Refresh => "Refresh selected category",
+            Self::RefreshAll => "Refresh categories and selected category",
             Self::Quit => "Quit or close popup",
             Self::ResetDefaults => "Restore defaults in settings",
             Self::JumpTop => "First article or article top",
@@ -138,6 +142,7 @@ pub struct KeyBindings {
     pub next_category: String,
     pub previous_category: String,
     pub refresh: String,
+    pub refresh_all: String,
     pub quit: String,
     pub reset_defaults: String,
     pub jump_top: String,
@@ -153,6 +158,7 @@ impl Default for KeyBindings {
             next_category: KEY_TAB.to_owned(),
             previous_category: KEY_SHIFT_TAB.to_owned(),
             refresh: "r".to_owned(),
+            refresh_all: "R".to_owned(),
             quit: "q".to_owned(),
             reset_defaults: "d".to_owned(),
             jump_top: "gg".to_owned(),
@@ -184,6 +190,11 @@ impl KeyBindings {
                 false,
             ),
             refresh: configured_key_sequence(&settings.refresh, &defaults.refresh, false),
+            refresh_all: configured_key_sequence(
+                &settings.refresh_all,
+                &defaults.refresh_all,
+                false,
+            ),
             quit: configured_key_sequence(&settings.quit, &defaults.quit, false),
             reset_defaults: configured_key_sequence(
                 &settings.reset_defaults,
@@ -207,6 +218,7 @@ impl KeyBindings {
             next_category: self.next_category.clone(),
             previous_category: self.previous_category.clone(),
             refresh: self.refresh.clone(),
+            refresh_all: self.refresh_all.clone(),
             quit: self.quit.clone(),
             reset_defaults: self.reset_defaults.clone(),
             jump_top: self.jump_top.clone(),
@@ -238,6 +250,10 @@ impl KeyBindings {
         key_sequence_label(&self.refresh)
     }
 
+    pub fn refresh_all_label(&self) -> String {
+        key_sequence_label(&self.refresh_all)
+    }
+
     pub fn quit_label(&self) -> String {
         key_sequence_label(&self.quit)
     }
@@ -258,6 +274,7 @@ impl KeyBindings {
             KeyBindingAction::NextCategory => &self.next_category,
             KeyBindingAction::PreviousCategory => &self.previous_category,
             KeyBindingAction::Refresh => &self.refresh,
+            KeyBindingAction::RefreshAll => &self.refresh_all,
             KeyBindingAction::Quit => &self.quit,
             KeyBindingAction::ResetDefaults => &self.reset_defaults,
             KeyBindingAction::JumpTop => &self.jump_top,
@@ -273,6 +290,7 @@ impl KeyBindings {
             KeyBindingAction::NextCategory => self.next_category = sequence,
             KeyBindingAction::PreviousCategory => self.previous_category = sequence,
             KeyBindingAction::Refresh => self.refresh = sequence,
+            KeyBindingAction::RefreshAll => self.refresh_all = sequence,
             KeyBindingAction::Quit => self.quit = sequence,
             KeyBindingAction::ResetDefaults => self.reset_defaults = sequence,
             KeyBindingAction::JumpTop => self.jump_top = sequence,
@@ -325,6 +343,10 @@ impl KeyBindings {
 
     fn matches_refresh(&self, key: KeyEvent) -> bool {
         key_matches_sequence(key, &self.refresh)
+    }
+
+    fn matches_refresh_all(&self, key: KeyEvent) -> bool {
+        key_matches_sequence(key, &self.refresh_all)
     }
 
     fn matches_quit(&self, key: KeyEvent) -> bool {
@@ -440,6 +462,58 @@ impl AppState {
                 self.error = Some(error.to_string());
             }
         }
+    }
+
+    async fn refresh_all(&mut self, client: &KagiClient) {
+        self.status = "Refreshing categories".to_owned();
+        self.error = None;
+
+        match client.categories().await {
+            Ok(categories) => {
+                self.apply_refreshed_categories(categories);
+                if self.selected_category_matches_filter() {
+                    self.load_selected_category(client).await;
+                } else {
+                    self.update_category_filter_status();
+                }
+            }
+            Err(error) => {
+                self.status = "Could not refresh categories".to_owned();
+                self.error = Some(error.to_string());
+            }
+        }
+    }
+
+    fn apply_refreshed_categories(&mut self, categories: Vec<Category>) {
+        if categories.is_empty() {
+            return;
+        }
+
+        let settings = self.current_settings();
+        let selected_key = self.selected_category().map(settings::category_key);
+        let mut enabled_categories = enabled_categories_from_settings(&categories, &settings)
+            .unwrap_or_else(|| default_enabled_categories(&categories));
+
+        let selected_category = selected_key
+            .as_deref()
+            .and_then(|key| find_category_by_settings_key(&categories, key))
+            .filter(|index| enabled_categories.get(*index).copied().unwrap_or(false))
+            .unwrap_or_else(|| {
+                select_initial_category(&categories, &mut enabled_categories, None).unwrap_or(0)
+            });
+
+        self.categories = categories;
+        self.enabled_categories = enabled_categories;
+        self.selected_category = selected_category;
+        self.loaded_category = None;
+        self.articles.clear();
+        self.selected_article = 0;
+        self.detail_open = false;
+        self.detail_scroll = 0;
+        self.config_selected_category = self.selected_category;
+        self.sync_selected_category_to_filter();
+        self.sync_config_selected_category_to_filter();
+        self.status = format!("Refreshed {} categories", self.categories.len());
     }
 
     pub fn selected_category(&self) -> Option<&Category> {
@@ -1259,6 +1333,8 @@ async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
         } else {
             state.update_category_filter_status();
         }
+    } else if state.keybinds.matches_refresh_all(key) {
+        state.refresh_all(client).await;
     }
 }
 
@@ -1443,6 +1519,12 @@ fn find_category(categories: &[Category], requested: &str) -> Option<usize> {
             || category.file.to_ascii_lowercase() == requested
             || category.file_stem().to_ascii_lowercase() == requested
     })
+}
+
+fn find_category_by_settings_key(categories: &[Category], key: &str) -> Option<usize> {
+    categories
+        .iter()
+        .position(|category| settings::category_matches_key(category, key))
 }
 
 fn configured_key_sequence(value: &str, default: &str, allow_multi: bool) -> String {
@@ -1988,6 +2070,35 @@ mod tests {
     }
 
     #[test]
+    fn refreshed_categories_preserve_enabled_selection_by_stable_key() {
+        let mut state = state_with_categories(vec![
+            category("World", "world.json"),
+            category("Today in History", "today_in_history.json"),
+        ]);
+        state.enabled_categories = vec![false, true];
+        state.selected_category = 1;
+        state.loaded_category = Some(1);
+        state.articles = vec![article("Old")];
+        state.detail_open = true;
+        state.config_selected_category = 0;
+
+        state.apply_refreshed_categories(vec![
+            category("Technology", "technology.json"),
+            category("Today in History", "today_in_history.json"),
+            category("Business", "business.json"),
+        ]);
+
+        assert_eq!(state.categories.len(), 3);
+        assert_eq!(state.enabled_categories, vec![false, true, false]);
+        assert_eq!(state.selected_category, 1);
+        assert_eq!(state.config_selected_category, 1);
+        assert_eq!(state.loaded_category, None);
+        assert!(state.articles.is_empty());
+        assert!(!state.detail_open);
+        assert_eq!(state.status, "Refreshed 3 categories");
+    }
+
+    #[test]
     fn opening_article_marks_it_read() {
         let mut state = state_with_categories(categories());
         let article = article("One");
@@ -2006,6 +2117,16 @@ mod tests {
     #[test]
     fn default_settings_keybind_is_comma() {
         assert_eq!(KeyBindings::default().settings, ",");
+    }
+
+    #[test]
+    fn default_refresh_all_keybind_is_uppercase_r() {
+        let keybinds = KeyBindings::default();
+
+        assert_eq!(keybinds.refresh_all, "R");
+        assert!(
+            keybinds.matches_refresh_all(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT))
+        );
     }
 
     #[test]
@@ -2030,6 +2151,7 @@ mod tests {
             next_category: "n".to_owned(),
             previous_category: "p".to_owned(),
             refresh: "u".to_owned(),
+            refresh_all: "U".to_owned(),
             quit: "x".to_owned(),
             reset_defaults: "D".to_owned(),
             jump_top: "tt".to_owned(),
@@ -2045,6 +2167,7 @@ mod tests {
                 next_category: "n".to_owned(),
                 previous_category: "p".to_owned(),
                 refresh: "u".to_owned(),
+                refresh_all: "U".to_owned(),
                 quit: "x".to_owned(),
                 reset_defaults: "D".to_owned(),
                 jump_top: "tt".to_owned(),
@@ -2062,6 +2185,7 @@ mod tests {
             next_category: "two".to_owned(),
             previous_category: String::new(),
             refresh: "u".to_owned(),
+            refresh_all: "two".to_owned(),
             quit: "x".to_owned(),
             reset_defaults: "D".to_owned(),
             jump_top: String::new(),
@@ -2076,6 +2200,7 @@ mod tests {
         assert_eq!(keybinds.next_category, KEY_TAB);
         assert_eq!(keybinds.previous_category, KEY_SHIFT_TAB);
         assert_eq!(keybinds.refresh, "u");
+        assert_eq!(keybinds.refresh_all, "R");
         assert_eq!(keybinds.quit, "x");
         assert_eq!(keybinds.reset_defaults, "D");
         assert_eq!(keybinds.jump_top, "gg");

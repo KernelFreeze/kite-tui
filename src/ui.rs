@@ -492,6 +492,7 @@ fn render_help_popup(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
         help_line(app.keybinds.settings_label(), "Open settings"),
         help_line(app.keybinds.category_filter_label(), "Filter categories"),
         help_line(app.keybinds.refresh_label(), "Refresh category"),
+        help_line(app.keybinds.refresh_all_label(), "Refresh all categories"),
         help_line(app.keybinds.quit_label(), "Quit or close popup"),
         help_line(
             app.keybinds.reset_defaults_label(),
