@@ -1,4 +1,5 @@
 # Kite TUI
+<img width="1080" height="634" alt="image" src="https://github.com/user-attachments/assets/cd2421e0-ddad-4814-8564-03a27d18c174" />
 
 Kite TUI is a terminal reader for [Kagi News](https://news.kagi.com/). It loads the
 public category index, fetches category RSS feeds, and lets you browse the
