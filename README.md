@@ -1,6 +1,6 @@
-# Kite
+# Kite TUI
 
-Kite is a terminal reader for [Kagi News](https://news.kagi.com/). It loads the
+Kite TUI is a terminal reader for [Kagi News](https://news.kagi.com/). It loads the
 public category index, fetches category RSS feeds, and lets you browse the
 latest Kagi summaries without leaving the terminal.
 
@@ -36,8 +36,8 @@ cargo run -- --base-url https://news.kagi.com/
 
 ## Settings
 
-Kite stores category visibility and keybinds in a TOML settings file under the
-platform configuration directory.
+Kite TUI stores category visibility and keybinds in a TOML settings file under
+the platform configuration directory.
 
 Keybinds can also be customized in the same file:
 
