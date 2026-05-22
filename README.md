@@ -1,8 +1,8 @@
 # Kite
 
-Kite is a terminal viewer for [Kagi News](https://news.kagi.com/). It reads the
-public Kagi News category index, fetches category RSS feeds, and renders the
-latest summarized stories in a TUI.
+Kite is a terminal reader for [Kagi News](https://news.kagi.com/). It loads the
+public category index, fetches category RSS feeds, and lets you browse the
+latest Kagi summaries without leaving the terminal.
 
 ## Run
 
