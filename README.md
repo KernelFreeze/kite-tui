@@ -60,7 +60,15 @@ jump_bottom = "G"
 ```
 
 Built-in themes are `ansi`, `catppuccin-mocha`, `catppuccin-latte`,
-`dracula`, and `gruvbox-dark`.
+`catppuccin-frappe`, `catppuccin-macchiato`, `dracula`, `gruvbox-dark`,
+`gruvbox-light`, `tokyo-night`, `tokyo-night-storm`, `tokyo-night-moon`,
+`rose-pine`, `rose-pine-moon`, `rose-pine-dawn`, `nord`, `solarized-dark`,
+`solarized-light`, `everforest-dark-hard`, `everforest-light-medium`,
+`kanagawa-wave`, `kanagawa-dragon`, `atom-one-dark`, `atom-one-light`,
+`monokai-pro`, `monokai-remastered`, `ayu-dark`, `ayu-mirage`, `ayu-light`,
+`github-dark`, `github-dark-dimmed`, `github-light`, `nightfox`, `dayfox`,
+`duskfox`, `dawnfox`, `flexoki-dark`, `flexoki-light`, `material-dark`,
+`sonokai`, and `synthwave`.
 
 Custom themes are TOML files in the `themes` directory next to
 `settings.toml`. The file stem is the theme id, so
