@@ -8,7 +8,7 @@ use ratatui::{
 use time::{OffsetDateTime, macros::format_description};
 
 use crate::{
-    app::{AppState, Focus, KeyBindingAction, SettingsSection},
+    app::{AppState, Focus, KeyBindingAction, SettingsSection, ThemeSelectionMode},
     models::{Article, SummaryBlock},
     theme::Theme,
 };
@@ -486,6 +486,54 @@ fn render_keybind_settings(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
 }
 
 fn render_theme_settings(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
+    let selector_height = if app.theme_dropdown_open { 6 } else { 2 };
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(selector_height), Constraint::Min(5)])
+        .split(area);
+
+    render_theme_mode_selector(frame, app, chunks[0]);
+    render_theme_list(frame, app, chunks[1]);
+}
+
+fn render_theme_mode_selector(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
+    let mut lines = vec![Line::from(vec![
+        Span::styled("Mode ", fg(app.theme.colors.text)),
+        Span::styled(
+            format!(" {} v ", app.selected_theme_mode.title()),
+            settings_selected_style(&app.theme).add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!("Platform {}", app.platform_color_scheme.title()),
+            fg(app.theme.colors.muted),
+        ),
+        Span::raw("  "),
+        Span::styled(app.selected_theme_slot_label(), fg(app.theme.colors.accent)),
+    ])];
+
+    if app.theme_dropdown_open {
+        for mode in ThemeSelectionMode::ALL {
+            let selected = mode == app.selected_theme_mode;
+            let style = if selected {
+                settings_selected_style(&app.theme)
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(Span::styled(
+                format!("  {:<8}", mode.title()),
+                style,
+            )));
+        }
+    }
+
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).block(Block::default().borders(Borders::BOTTOM)),
+        area,
+    );
+}
+
+fn render_theme_list(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     let items = app
         .themes
         .themes()
@@ -493,7 +541,7 @@ fn render_theme_settings(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
         .enumerate()
         .map(|(index, theme)| {
             let selected = index == app.selected_theme;
-            let active = theme.id == app.theme.id;
+            let active = theme.id == app.selected_theme_slot_id();
             let style = if selected {
                 settings_selected_style(&app.theme)
             } else if active {
@@ -520,7 +568,7 @@ fn render_theme_settings(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     list_state.select(Some(app.selected_theme));
     frame.render_stateful_widget(
         List::new(items).block(focused_block(
-            "Themes",
+            format!("Themes - {}", app.selected_theme_slot_label()),
             app.settings_section == SettingsSection::Themes,
             &app.theme,
         )),
@@ -577,7 +625,7 @@ fn render_help_popup(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
         help_line(
             &app.theme,
             "Enter",
-            "Load category, open article, edit keybind, or select theme",
+            "Load category, open article, edit keybind, or open theme mode",
         ),
         help_line(&app.theme, "Esc", "Close popup or clear filter"),
         help_line(&app.theme, "j/k, arrows", "Move selection"),

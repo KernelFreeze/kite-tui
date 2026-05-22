@@ -59,6 +59,20 @@ jump_top = "gg"
 jump_bottom = "G"
 ```
 
+To follow the platform color scheme, replace the fixed `theme` value with a
+theme table:
+
+```toml
+[theme]
+mode = "device"
+light = "catppuccin-latte"
+dark = "catppuccin-mocha"
+unspecified = "ansi"
+```
+
+`mode` can be `device`, `light`, or `dark`. A fixed `theme = "ansi"` value uses
+one theme for every color scheme.
+
 Built-in themes are `ansi`, `catppuccin-mocha`, `catppuccin-latte`,
 `catppuccin-frappe`, `catppuccin-macchiato`, `dracula`, `gruvbox-dark`,
 `gruvbox-light`, `tokyo-night`, `tokyo-night-storm`, `tokyo-night-moon`,
@@ -72,7 +86,8 @@ Built-in themes are `ansi`, `catppuccin-mocha`, `catppuccin-latte`,
 
 Custom themes are TOML files in the `themes` directory next to
 `settings.toml`. The file stem is the theme id, so
-`themes/my-theme.toml` can be selected with `theme = "my-theme"`:
+`themes/my-theme.toml` can be selected with `theme = "my-theme"` or used in a
+theme table:
 
 ```toml
 name = "My Theme"

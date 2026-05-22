@@ -1,4 +1,7 @@
-use std::{io, time::Duration};
+use std::{
+    io,
+    time::{Duration, Instant},
+};
 
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
@@ -13,12 +16,18 @@ use crate::{
     kagi::KagiClient,
     models::{Article, Category, SummaryBlock},
     read_state::ReadArticles,
-    settings::{self, CategorySettings, KeyBindingSettings, Settings},
-    theme::{ANSI_THEME_ID, Theme, ThemeCatalog},
+    settings::{
+        self, CategorySettings, KeyBindingSettings, Settings, ThemeMode, ThemeSettings,
+        ThemeVariantSettings,
+    },
+    theme::{
+        ANSI_THEME_ID, PlatformColorScheme, Theme, ThemeCatalog, detect_platform_color_scheme,
+    },
     ui,
 };
 
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const THEME_MODE_POLL_INTERVAL: Duration = Duration::from_secs(3);
 const KEY_TAB: &str = "tab";
 const KEY_SHIFT_TAB: &str = "shift+tab";
 const DEFAULT_ENABLED_CATEGORY_KEYS: &[&str] = &[
@@ -44,6 +53,57 @@ pub enum SettingsSection {
     Categories,
     Keybinds,
     Themes,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeSelectionMode {
+    Light,
+    Dark,
+    Device,
+    Fixed,
+}
+
+impl ThemeSelectionMode {
+    pub const ALL: [Self; 4] = [Self::Light, Self::Dark, Self::Device, Self::Fixed];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+            Self::Device => "Device",
+            Self::Fixed => "Fixed",
+        }
+    }
+
+    fn from_settings(settings: &ThemeSettings) -> Self {
+        match settings {
+            ThemeSettings::Fixed(_) => Self::Fixed,
+            ThemeSettings::Variants(variants) => Self::from_theme_mode(variants.mode),
+        }
+    }
+
+    fn from_theme_mode(mode: ThemeMode) -> Self {
+        match mode {
+            ThemeMode::Device => Self::Device,
+            ThemeMode::Light => Self::Light,
+            ThemeMode::Dark => Self::Dark,
+        }
+    }
+
+    fn theme_mode(self) -> Option<ThemeMode> {
+        match self {
+            Self::Light => Some(ThemeMode::Light),
+            Self::Dark => Some(ThemeMode::Dark),
+            Self::Device => Some(ThemeMode::Device),
+            Self::Fixed => None,
+        }
+    }
+
+    fn move_by(self, step: isize) -> Self {
+        let current = Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0) as isize;
+        let next = (current + step).rem_euclid(Self::ALL.len() as isize);
+        Self::ALL[next as usize]
+    }
 }
 
 impl SettingsSection {
@@ -369,7 +429,9 @@ pub struct AppState {
     pub enabled_categories: Vec<bool>,
     pub keybinds: KeyBindings,
     pub theme: Theme,
+    pub theme_settings: ThemeSettings,
     pub themes: ThemeCatalog,
+    pub platform_color_scheme: PlatformColorScheme,
     pub selected_category: usize,
     pub loaded_category: Option<usize>,
     pub articles: Vec<Article>,
@@ -389,6 +451,8 @@ pub struct AppState {
     pub editing_keybind: Option<KeyBindingAction>,
     pub keybind_input: String,
     pub selected_theme: usize,
+    pub selected_theme_mode: ThemeSelectionMode,
+    pub theme_dropdown_open: bool,
     pub help_open: bool,
     pub detail_open: bool,
     pub detail_scroll: u16,
@@ -402,10 +466,18 @@ impl AppState {
         let (settings, settings_error) = load_settings();
         let (read_articles, read_articles_error) = load_read_articles();
         let (themes, mut theme_errors) = ThemeCatalog::load();
-        let (theme, selected_theme, theme_error) = themes.selected_theme(&settings.theme);
+        let (platform_color_scheme, platform_error) = load_platform_color_scheme();
+        if let Some(error) = platform_error {
+            theme_errors.push(error);
+        }
+        let (theme, selected_theme, theme_error) = themes.selected_theme(theme_id_for_settings(
+            &settings.theme,
+            platform_color_scheme,
+        ));
         if let Some(error) = theme_error {
             theme_errors.push(error);
         }
+        let selected_theme_mode = ThemeSelectionMode::from_settings(&settings.theme);
         let mut enabled_categories = enabled_categories_from_settings(&categories, &settings)
             .unwrap_or_else(|| default_enabled_categories(&categories));
         let keybinds = KeyBindings::from_settings(&settings.keybinds);
@@ -417,7 +489,9 @@ impl AppState {
             enabled_categories,
             keybinds,
             theme,
+            theme_settings: settings.theme,
             themes,
+            platform_color_scheme,
             selected_category,
             loaded_category: None,
             articles: Vec::new(),
@@ -437,6 +511,8 @@ impl AppState {
             editing_keybind: None,
             keybind_input: String::new(),
             selected_theme,
+            selected_theme_mode,
+            theme_dropdown_open: false,
             help_open: false,
             detail_open: false,
             detail_scroll: 0,
@@ -691,6 +767,7 @@ impl AppState {
         self.settings_open = true;
         self.settings_section = SettingsSection::Categories;
         self.config_selected_category = self.selected_category;
+        self.theme_dropdown_open = false;
         self.sync_selected_theme();
         self.config_filter_active = false;
         self.editing_keybind = None;
@@ -706,6 +783,7 @@ impl AppState {
     fn close_settings(&mut self) {
         self.settings_open = false;
         self.config_filter_active = false;
+        self.theme_dropdown_open = false;
         self.editing_keybind = None;
         self.keybind_input.clear();
         self.status = format!(
@@ -719,6 +797,7 @@ impl AppState {
     fn next_settings_section(&mut self) {
         self.settings_section = self.settings_section.next();
         self.config_filter_active = false;
+        self.theme_dropdown_open = false;
         self.editing_keybind = None;
         self.keybind_input.clear();
         self.update_settings_status();
@@ -727,6 +806,7 @@ impl AppState {
     fn previous_settings_section(&mut self) {
         self.settings_section = self.settings_section.previous();
         self.config_filter_active = false;
+        self.theme_dropdown_open = false;
         self.editing_keybind = None;
         self.keybind_input.clear();
         self.update_settings_status();
@@ -1005,12 +1085,17 @@ impl AppState {
 
     fn update_theme_settings_status(&mut self) {
         if let Some(theme) = self.themes.themes().get(self.selected_theme) {
-            let marker = if theme.id == self.theme.id {
+            let marker = if theme.id == self.selected_theme_slot_id() {
                 "current"
             } else {
                 "available"
             };
-            self.status = format!("Selected {} ({marker})", theme.name);
+            self.status = format!(
+                "{} mode: selected {} for {} ({marker})",
+                self.selected_theme_mode.title(),
+                theme.name,
+                self.selected_theme_slot_label()
+            );
         } else {
             self.status = "No themes available".to_owned();
         }
@@ -1035,21 +1120,77 @@ impl AppState {
         self.update_theme_settings_status();
     }
 
+    fn toggle_theme_mode_dropdown(&mut self) {
+        self.theme_dropdown_open = !self.theme_dropdown_open;
+        self.update_theme_settings_status();
+    }
+
+    fn close_theme_mode_dropdown(&mut self) {
+        self.theme_dropdown_open = false;
+        self.update_theme_settings_status();
+    }
+
+    fn move_theme_mode_by(&mut self, step: isize) {
+        let mode = self.selected_theme_mode.move_by(step);
+        self.set_theme_selection_mode(mode);
+    }
+
+    fn set_theme_selection_mode(&mut self, mode: ThemeSelectionMode) {
+        self.selected_theme_mode = mode;
+        self.theme_settings = match mode.theme_mode() {
+            Some(theme_mode) => {
+                let mut variants = self.variant_theme_settings();
+                variants.mode = theme_mode;
+                ThemeSettings::Variants(variants)
+            }
+            None => ThemeSettings::Fixed(self.theme.id.clone()),
+        };
+        self.apply_theme_settings();
+        self.sync_selected_theme();
+        self.status = format!("Theme mode set to {}", mode.title());
+        self.persist_settings();
+    }
+
     fn select_theme(&mut self) {
         let Some(theme) = self.themes.themes().get(self.selected_theme).cloned() else {
             self.status = "No themes available".to_owned();
             return;
         };
 
-        self.theme = theme;
-        self.status = format!("Theme set to {}", self.theme.name);
+        let theme_id = theme.id.clone();
+        match self.selected_theme_mode.theme_mode() {
+            Some(theme_mode) => {
+                let mut variants = self.variant_theme_settings();
+                variants.mode = theme_mode;
+                match theme_slot_for_mode(theme_mode, self.platform_color_scheme) {
+                    ThemeSlot::Light => variants.light = theme_id,
+                    ThemeSlot::Dark => variants.dark = theme_id,
+                    ThemeSlot::Unspecified => variants.unspecified = theme_id,
+                }
+                self.theme_settings = ThemeSettings::Variants(variants);
+            }
+            None => {
+                self.theme_settings = ThemeSettings::Fixed(theme_id);
+            }
+        }
+
+        self.apply_theme_settings();
+        self.sync_selected_theme();
+        self.status = format!(
+            "Theme set to {} for {}",
+            theme.name,
+            self.selected_theme_slot_label()
+        );
         self.persist_settings();
     }
 
     fn reset_default_theme(&mut self) {
-        let (theme, index) = self.themes.default_theme();
-        self.theme = theme;
-        self.selected_theme = index;
+        let (theme, _) = self.themes.default_theme();
+        self.theme_settings = ThemeSettings::Fixed(theme.id);
+        self.selected_theme_mode = ThemeSelectionMode::Fixed;
+        self.theme_dropdown_open = false;
+        self.apply_theme_settings();
+        self.sync_selected_theme();
         self.status = "Theme restored to ANSI".to_owned();
         self.persist_settings();
     }
@@ -1057,8 +1198,75 @@ impl AppState {
     fn sync_selected_theme(&mut self) {
         self.selected_theme = self
             .themes
-            .index_of(&self.theme.id)
+            .index_of(self.selected_theme_slot_id())
             .unwrap_or_else(|| self.themes.index_of(ANSI_THEME_ID).unwrap_or(0));
+    }
+
+    pub fn selected_theme_slot_id(&self) -> &str {
+        match &self.theme_settings {
+            ThemeSettings::Fixed(theme) => theme,
+            ThemeSettings::Variants(variants) => theme_id_for_variants(
+                variants,
+                self.selected_theme_mode,
+                self.platform_color_scheme,
+            ),
+        }
+    }
+
+    pub fn selected_theme_slot_label(&self) -> &'static str {
+        match self.selected_theme_mode {
+            ThemeSelectionMode::Fixed => "all schemes",
+            ThemeSelectionMode::Light => "light mode",
+            ThemeSelectionMode::Dark => "dark mode",
+            ThemeSelectionMode::Device => match self.platform_color_scheme {
+                PlatformColorScheme::Light => "device light mode",
+                PlatformColorScheme::Dark => "device dark mode",
+                PlatformColorScheme::Unspecified => "unspecified device mode",
+            },
+        }
+    }
+
+    fn variant_theme_settings(&self) -> ThemeVariantSettings {
+        match &self.theme_settings {
+            ThemeSettings::Fixed(theme) => ThemeVariantSettings {
+                light: theme.clone(),
+                dark: theme.clone(),
+                unspecified: theme.clone(),
+                ..ThemeVariantSettings::default()
+            },
+            ThemeSettings::Variants(variants) => variants.clone(),
+        }
+    }
+
+    fn apply_theme_settings(&mut self) {
+        let requested = theme_id_for_settings(&self.theme_settings, self.platform_color_scheme);
+        let (theme, selected_theme, theme_error) = self.themes.selected_theme(requested);
+        self.theme = theme;
+        self.selected_theme = selected_theme;
+        if let Some(error) = theme_error {
+            self.error = Some(error);
+        }
+    }
+
+    fn refresh_platform_color_scheme(&mut self) {
+        let Ok(color_scheme) = detect_platform_color_scheme() else {
+            return;
+        };
+        if color_scheme == self.platform_color_scheme {
+            return;
+        }
+
+        self.platform_color_scheme = color_scheme;
+        if matches!(
+            &self.theme_settings,
+            ThemeSettings::Variants(ThemeVariantSettings {
+                mode: ThemeMode::Device,
+                ..
+            })
+        ) {
+            self.apply_theme_settings();
+            self.sync_selected_theme();
+        }
     }
 
     fn selected_keybind_action(&self) -> Option<KeyBindingAction> {
@@ -1073,7 +1281,7 @@ impl AppState {
 
     fn current_settings(&self) -> Settings {
         Settings {
-            theme: self.theme.id.clone(),
+            theme: self.theme_settings.clone(),
             categories: CategorySettings {
                 enabled: self
                     .enabled_category_indices()
@@ -1301,7 +1509,14 @@ async fn run_event_loop(
     client: &KagiClient,
     state: &mut AppState,
 ) -> Result<()> {
+    let mut next_theme_mode_check = Instant::now() + THEME_MODE_POLL_INTERVAL;
+
     while !state.should_quit {
+        if Instant::now() >= next_theme_mode_check {
+            state.refresh_platform_color_scheme();
+            next_theme_mode_check = Instant::now() + THEME_MODE_POLL_INTERVAL;
+        }
+
         terminal.draw(|frame| ui::draw(frame, state))?;
 
         if event::poll(EVENT_POLL_INTERVAL)? {
@@ -1473,6 +1688,11 @@ fn handle_settings_key(state: &mut AppState, key: KeyEvent) {
         return;
     }
 
+    if state.theme_dropdown_open {
+        handle_theme_mode_dropdown_key(state, key);
+        return;
+    }
+
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
         KeyCode::Esc => state.close_settings(),
@@ -1526,11 +1746,13 @@ fn handle_keybind_settings_key(state: &mut AppState, key: KeyEvent) {
 
 fn handle_theme_settings_key(state: &mut AppState, key: KeyEvent) {
     match key.code {
-        KeyCode::Enter | KeyCode::Char(' ') => state.select_theme(),
+        KeyCode::Enter => state.toggle_theme_mode_dropdown(),
+        KeyCode::Char(' ') => state.select_theme(),
         KeyCode::Down | KeyCode::Char('j') => state.move_theme_by(1, true),
         KeyCode::Up | KeyCode::Char('k') => state.move_theme_by(-1, true),
         KeyCode::PageDown => state.move_theme_by(4, false),
         KeyCode::PageUp => state.move_theme_by(-4, false),
+        KeyCode::Char('m') => state.toggle_theme_mode_dropdown(),
         _ => {}
     }
 
@@ -1538,6 +1760,16 @@ fn handle_theme_settings_key(state: &mut AppState, key: KeyEvent) {
         state.close_settings();
     } else if state.keybinds.matches_reset_defaults(key) {
         state.reset_default_theme();
+    }
+}
+
+fn handle_theme_mode_dropdown_key(state: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
+        KeyCode::Esc | KeyCode::Enter | KeyCode::Char(' ') => state.close_theme_mode_dropdown(),
+        KeyCode::Down | KeyCode::Char('j') => state.move_theme_mode_by(1),
+        KeyCode::Up | KeyCode::Char('k') => state.move_theme_mode_by(-1),
+        _ => {}
     }
 }
 
@@ -1761,6 +1993,16 @@ fn load_settings() -> (Settings, Option<String>) {
     }
 }
 
+fn load_platform_color_scheme() -> (PlatformColorScheme, Option<String>) {
+    match detect_platform_color_scheme() {
+        Ok(color_scheme) => (color_scheme, None),
+        Err(error) => (
+            PlatformColorScheme::Unspecified,
+            Some(format!("could not detect platform color scheme: {error}")),
+        ),
+    }
+}
+
 fn load_read_articles() -> (ReadArticles, Option<String>) {
     match ReadArticles::load() {
         Ok(read_articles) => (read_articles, None),
@@ -1780,6 +2022,61 @@ fn startup_error(
     errors.extend(theme_errors);
 
     (!errors.is_empty()).then(|| errors.join("; "))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThemeSlot {
+    Light,
+    Dark,
+    Unspecified,
+}
+
+fn theme_id_for_settings(
+    settings: &ThemeSettings,
+    platform_color_scheme: PlatformColorScheme,
+) -> &str {
+    match settings {
+        ThemeSettings::Fixed(theme) => theme,
+        ThemeSettings::Variants(variants) => theme_id_for_variants(
+            variants,
+            ThemeSelectionMode::from_theme_mode(variants.mode),
+            platform_color_scheme,
+        ),
+    }
+}
+
+fn theme_id_for_variants(
+    variants: &ThemeVariantSettings,
+    mode: ThemeSelectionMode,
+    platform_color_scheme: PlatformColorScheme,
+) -> &str {
+    match theme_slot_for_selection(mode, platform_color_scheme) {
+        ThemeSlot::Light => &variants.light,
+        ThemeSlot::Dark => &variants.dark,
+        ThemeSlot::Unspecified => &variants.unspecified,
+    }
+}
+
+fn theme_slot_for_mode(mode: ThemeMode, platform_color_scheme: PlatformColorScheme) -> ThemeSlot {
+    theme_slot_for_selection(
+        ThemeSelectionMode::from_theme_mode(mode),
+        platform_color_scheme,
+    )
+}
+
+fn theme_slot_for_selection(
+    mode: ThemeSelectionMode,
+    platform_color_scheme: PlatformColorScheme,
+) -> ThemeSlot {
+    match mode {
+        ThemeSelectionMode::Light => ThemeSlot::Light,
+        ThemeSelectionMode::Dark => ThemeSlot::Dark,
+        ThemeSelectionMode::Device | ThemeSelectionMode::Fixed => match platform_color_scheme {
+            PlatformColorScheme::Light => ThemeSlot::Light,
+            PlatformColorScheme::Dark => ThemeSlot::Dark,
+            PlatformColorScheme::Unspecified => ThemeSlot::Unspecified,
+        },
+    }
 }
 
 fn enabled_categories_from_settings(
@@ -1919,7 +2216,9 @@ mod tests {
             categories,
             keybinds: KeyBindings::default(),
             theme: Theme::ansi(),
+            theme_settings: ThemeSettings::Fixed(ANSI_THEME_ID.to_owned()),
             themes: ThemeCatalog::built_in(),
+            platform_color_scheme: PlatformColorScheme::Unspecified,
             selected_category: 0,
             loaded_category: Some(0),
             articles: Vec::new(),
@@ -1939,6 +2238,8 @@ mod tests {
             editing_keybind: None,
             keybind_input: String::new(),
             selected_theme: 0,
+            selected_theme_mode: ThemeSelectionMode::Fixed,
+            theme_dropdown_open: false,
             help_open: false,
             detail_open: false,
             detail_scroll: 0,
@@ -2161,7 +2462,7 @@ mod tests {
         assert_eq!(
             state.current_settings(),
             Settings {
-                theme: "ansi".to_owned(),
+                theme: ThemeSettings::Fixed("ansi".to_owned()),
                 categories: CategorySettings {
                     enabled: vec!["todayinhistory".to_owned()]
                 },
@@ -2181,9 +2482,33 @@ mod tests {
             .unwrap()
             .clone();
 
-        state.theme = theme;
+        state.theme_settings = ThemeSettings::Fixed(theme.id);
 
-        assert_eq!(state.current_settings().theme, "dracula");
+        assert_eq!(
+            state.current_settings().theme,
+            ThemeSettings::Fixed("dracula".to_owned())
+        );
+    }
+
+    #[test]
+    fn current_settings_persists_device_theme_variants() {
+        let mut state = state_with_categories(categories());
+        state.theme_settings = ThemeSettings::Variants(ThemeVariantSettings {
+            mode: ThemeMode::Device,
+            light: "catppuccin-latte".to_owned(),
+            dark: "catppuccin-mocha".to_owned(),
+            unspecified: "ansi".to_owned(),
+        });
+
+        assert_eq!(
+            state.current_settings().theme,
+            ThemeSettings::Variants(ThemeVariantSettings {
+                mode: ThemeMode::Device,
+                light: "catppuccin-latte".to_owned(),
+                dark: "catppuccin-mocha".to_owned(),
+                unspecified: "ansi".to_owned(),
+            })
+        );
     }
 
     #[test]
@@ -2208,12 +2533,39 @@ mod tests {
         state.move_theme_by(1, true);
 
         assert_eq!(state.selected_theme, 1);
-        assert_eq!(state.status, "Selected Catppuccin Mocha (available)");
+        assert_eq!(
+            state.status,
+            "Fixed mode: selected Catppuccin Mocha for all schemes (available)"
+        );
 
         state.move_theme_by(-1, true);
 
         assert_eq!(state.selected_theme, 0);
-        assert_eq!(state.status, "Selected ANSI (current)");
+        assert_eq!(
+            state.status,
+            "Fixed mode: selected ANSI for all schemes (current)"
+        );
+    }
+
+    #[test]
+    fn selecting_theme_in_device_dark_mode_updates_dark_variant() {
+        let mut state = state_with_categories(categories());
+        state.platform_color_scheme = PlatformColorScheme::Dark;
+
+        state.set_theme_selection_mode(ThemeSelectionMode::Device);
+        state.selected_theme = state.themes.index_of("dracula").unwrap();
+        state.select_theme();
+
+        assert_eq!(
+            state.current_settings().theme,
+            ThemeSettings::Variants(ThemeVariantSettings {
+                mode: ThemeMode::Device,
+                light: "ansi".to_owned(),
+                dark: "dracula".to_owned(),
+                unspecified: "ansi".to_owned(),
+            })
+        );
+        assert_eq!(state.theme.id, "dracula");
     }
 
     #[test]

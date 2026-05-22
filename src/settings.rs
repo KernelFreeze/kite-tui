@@ -19,8 +19,8 @@ pub type Result<T> = std::result::Result<T, SettingsError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
-    #[serde(default = "default_theme")]
-    pub theme: String,
+    #[serde(default)]
+    pub theme: ThemeSettings,
 
     #[serde(default)]
     pub categories: CategorySettings,
@@ -32,7 +32,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            theme: default_theme(),
+            theme: ThemeSettings::default(),
             categories: CategorySettings::default(),
             keybinds: KeyBindingSettings::default(),
         }
@@ -200,6 +200,54 @@ fn default_theme() -> String {
     "ansi".to_owned()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ThemeSettings {
+    Fixed(String),
+    Variants(ThemeVariantSettings),
+}
+
+impl Default for ThemeSettings {
+    fn default() -> Self {
+        Self::Fixed(default_theme())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThemeVariantSettings {
+    #[serde(default)]
+    pub mode: ThemeMode,
+
+    #[serde(default = "default_theme")]
+    pub light: String,
+
+    #[serde(default = "default_theme")]
+    pub dark: String,
+
+    #[serde(default = "default_theme")]
+    pub unspecified: String,
+}
+
+impl Default for ThemeVariantSettings {
+    fn default() -> Self {
+        Self {
+            mode: ThemeMode::default(),
+            light: default_theme(),
+            dark: default_theme(),
+            unspecified: default_theme(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemeMode {
+    #[default]
+    Device,
+    Light,
+    Dark,
+}
+
 fn default_help_key() -> String {
     "?".to_owned()
 }
@@ -277,7 +325,7 @@ mod tests {
     #[test]
     fn settings_round_trip_as_toml() {
         let settings = Settings {
-            theme: "ansi".to_owned(),
+            theme: ThemeSettings::Fixed("ansi".to_owned()),
             categories: CategorySettings {
                 enabled: vec!["world".to_owned(), "technology".to_owned()],
             },
@@ -316,7 +364,7 @@ mod tests {
                 jump_bottom: "G".to_owned(),
             }
         );
-        assert_eq!(decoded.theme, "ansi");
+        assert_eq!(decoded.theme, ThemeSettings::Fixed("ansi".to_owned()));
     }
 
     #[test]
@@ -329,7 +377,31 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(decoded.theme, "ansi");
+        assert_eq!(decoded.theme, ThemeSettings::Fixed("ansi".to_owned()));
+    }
+
+    #[test]
+    fn theme_variants_load_from_table() {
+        let decoded = toml::from_str::<Settings>(
+            r#"
+            [theme]
+            mode = "device"
+            light = "catppuccin-latte"
+            dark = "catppuccin-mocha"
+            unspecified = "ansi"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            decoded.theme,
+            ThemeSettings::Variants(ThemeVariantSettings {
+                mode: ThemeMode::Device,
+                light: "catppuccin-latte".to_owned(),
+                dark: "catppuccin-mocha".to_owned(),
+                unspecified: "ansi".to_owned(),
+            })
+        );
     }
 
     #[test]

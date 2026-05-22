@@ -11,6 +11,37 @@ use crate::settings;
 
 pub const ANSI_THEME_ID: &str = "ansi";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlatformColorScheme {
+    Light,
+    Dark,
+    Unspecified,
+}
+
+impl PlatformColorScheme {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+            Self::Unspecified => "Unspecified",
+        }
+    }
+}
+
+impl From<dark_light::Mode> for PlatformColorScheme {
+    fn from(mode: dark_light::Mode) -> Self {
+        match mode {
+            dark_light::Mode::Light => Self::Light,
+            dark_light::Mode::Dark => Self::Dark,
+            dark_light::Mode::Unspecified => Self::Unspecified,
+        }
+    }
+}
+
+pub fn detect_platform_color_scheme() -> Result<PlatformColorScheme, dark_light::Error> {
+    dark_light::detect().map(PlatformColorScheme::from)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Theme {
     pub id: String,
