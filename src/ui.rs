@@ -30,6 +30,9 @@ pub fn draw(frame: &mut Frame<'_>, app: &AppState) {
     if app.config_open {
         render_category_config_popup(frame, app, area);
     }
+    if app.help_open {
+        render_help_popup(frame, app, area);
+    }
 }
 
 fn render_header(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
@@ -303,14 +306,14 @@ fn render_config_filter(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
         Style::default().fg(Color::DarkGray)
     };
     let value = if app.has_config_filter() {
-        app.config_filter.as_str()
+        app.config_filter.clone()
     } else {
-        "type / to search"
+        format!("press {} to search", app.keybinds.category_filter_label())
     };
 
     let paragraph = Paragraph::new(Line::from(vec![
         Span::styled("Search ", Style::default().fg(Color::White)),
-        Span::styled(value.to_owned(), style),
+        Span::styled(value, style),
     ]))
     .block(Block::default().borders(Borders::BOTTOM));
     frame.render_widget(paragraph, area);
@@ -369,8 +372,52 @@ fn render_config_category_list(frame: &mut Frame<'_>, app: &AppState, area: Rect
     );
 }
 
+fn render_help_popup(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
+    let popup = centered_rect(64, 72, area);
+    frame.render_widget(Clear, popup);
+
+    let lines = vec![
+        help_line(app.keybinds.help_label(), "Open help"),
+        help_line(app.keybinds.config_label(), "Configure categories"),
+        help_line(app.keybinds.category_filter_label(), "Filter categories"),
+        help_line(app.keybinds.refresh_label(), "Refresh category"),
+        help_line(app.keybinds.quit_label(), "Quit or close popup"),
+        help_line(
+            app.keybinds.reset_defaults_label(),
+            "Restore default categories in settings",
+        ),
+        Line::from(""),
+        help_line("Tab", "Switch panes"),
+        help_line("Enter", "Load category or open article"),
+        help_line("Esc", "Close popup or clear filter"),
+        help_line("j/k, arrows", "Move selection"),
+        help_line("PageUp/PageDown", "Move by page"),
+        help_line("Space", "Toggle category in settings"),
+    ];
+
+    let paragraph = Paragraph::new(Text::from(lines))
+        .block(focused_block("Help", true))
+        .wrap(Wrap { trim: false });
+
+    frame.render_widget(paragraph, popup);
+}
+
+fn help_line(key: impl Into<String>, description: impl Into<String>) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{:<16}", key.into()),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(description.into()),
+    ])
+}
+
 fn render_status(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
-    let focus = if app.config_open {
+    let focus = if app.help_open {
+        "Help"
+    } else if app.config_open {
         "Config"
     } else if app.detail_open {
         "Article"
@@ -380,20 +427,7 @@ fn render_status(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
             Focus::Articles => "Articles",
         }
     };
-    let help = if app.config_open && app.config_filter_active {
-        "Type to search, Space toggles, Enter/Esc accepts"
-    } else if app.config_open {
-        "Space toggles, / searches, d resets defaults, Enter/Esc closes"
-    } else if app.detail_open {
-        "Esc/Enter returns to list, j/k scroll, q quit"
-    } else if app.category_filter_active {
-        "Type to filter, Enter/Esc accept, Backspace edits"
-    } else {
-        match app.focus {
-            Focus::Categories => "/ filters categories, Enter loads category, Tab switches panes",
-            Focus::Articles => "/ filters categories, Enter opens article, Tab switches panes",
-        }
-    };
+    let help = format!("{} help", app.keybinds.help_label());
     let status = app.error.as_deref().unwrap_or(&app.status);
     let paragraph = Paragraph::new(Line::from(vec![
         Span::styled(focus, Style::default().fg(Color::Magenta)),

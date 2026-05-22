@@ -12,7 +12,7 @@ use crate::{
     error::{KiteError, Result},
     kagi::KagiClient,
     models::{Article, Category},
-    settings::{self, CategorySettings, Settings},
+    settings::{self, CategorySettings, KeyBindingSettings, Settings},
     ui,
 };
 
@@ -44,10 +44,108 @@ impl Focus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyBindings {
+    pub help: char,
+    pub config: char,
+    pub category_filter: char,
+    pub refresh: char,
+    pub quit: char,
+    pub reset_defaults: char,
+}
+
+impl Default for KeyBindings {
+    fn default() -> Self {
+        Self {
+            help: '?',
+            config: ',',
+            category_filter: '/',
+            refresh: 'r',
+            quit: 'q',
+            reset_defaults: 'd',
+        }
+    }
+}
+
+impl KeyBindings {
+    fn from_settings(settings: &KeyBindingSettings) -> Self {
+        let defaults = Self::default();
+
+        Self {
+            help: configured_key(&settings.help, defaults.help),
+            config: configured_key(&settings.config, defaults.config),
+            category_filter: configured_key(&settings.category_filter, defaults.category_filter),
+            refresh: configured_key(&settings.refresh, defaults.refresh),
+            quit: configured_key(&settings.quit, defaults.quit),
+            reset_defaults: configured_key(&settings.reset_defaults, defaults.reset_defaults),
+        }
+    }
+
+    fn as_settings(self) -> KeyBindingSettings {
+        KeyBindingSettings {
+            help: self.help.to_string(),
+            config: self.config.to_string(),
+            category_filter: self.category_filter.to_string(),
+            refresh: self.refresh.to_string(),
+            quit: self.quit.to_string(),
+            reset_defaults: self.reset_defaults.to_string(),
+        }
+    }
+
+    pub fn help_label(self) -> String {
+        key_label(self.help)
+    }
+
+    pub fn config_label(self) -> String {
+        key_label(self.config)
+    }
+
+    pub fn category_filter_label(self) -> String {
+        key_label(self.category_filter)
+    }
+
+    pub fn refresh_label(self) -> String {
+        key_label(self.refresh)
+    }
+
+    pub fn quit_label(self) -> String {
+        key_label(self.quit)
+    }
+
+    pub fn reset_defaults_label(self) -> String {
+        key_label(self.reset_defaults)
+    }
+
+    fn matches_help(self, key: KeyEvent) -> bool {
+        key_matches_char(key, self.help)
+    }
+
+    fn matches_config(self, key: KeyEvent) -> bool {
+        key_matches_char(key, self.config)
+    }
+
+    fn matches_category_filter(self, key: KeyEvent) -> bool {
+        key_matches_char(key, self.category_filter)
+    }
+
+    fn matches_refresh(self, key: KeyEvent) -> bool {
+        key_matches_char(key, self.refresh)
+    }
+
+    fn matches_quit(self, key: KeyEvent) -> bool {
+        key_matches_char(key, self.quit)
+    }
+
+    fn matches_reset_defaults(self, key: KeyEvent) -> bool {
+        key_matches_char(key, self.reset_defaults)
+    }
+}
+
 #[derive(Debug)]
 pub struct AppState {
     pub categories: Vec<Category>,
     pub enabled_categories: Vec<bool>,
+    pub keybinds: KeyBindings,
     pub selected_category: usize,
     pub loaded_category: Option<usize>,
     pub articles: Vec<Article>,
@@ -61,6 +159,7 @@ pub struct AppState {
     pub config_selected_category: usize,
     pub config_filter: String,
     pub config_filter_active: bool,
+    pub help_open: bool,
     pub detail_open: bool,
     pub detail_scroll: u16,
     should_quit: bool,
@@ -69,13 +168,17 @@ pub struct AppState {
 impl AppState {
     pub async fn bootstrap(client: &KagiClient, initial_category: Option<&str>) -> Result<Self> {
         let categories = client.categories().await?;
-        let (mut enabled_categories, settings_error) = load_enabled_categories(&categories);
+        let (settings, settings_error) = load_settings();
+        let mut enabled_categories = enabled_categories_from_settings(&categories, &settings)
+            .unwrap_or_else(|| default_enabled_categories(&categories));
+        let keybinds = KeyBindings::from_settings(&settings.keybinds);
         let selected_category =
             select_initial_category(&categories, &mut enabled_categories, initial_category)?;
 
         let mut state = Self {
             categories,
             enabled_categories,
+            keybinds,
             selected_category,
             loaded_category: None,
             articles: Vec::new(),
@@ -89,6 +192,7 @@ impl AppState {
             config_selected_category: selected_category,
             config_filter: String::new(),
             config_filter_active: false,
+            help_open: false,
             detail_open: false,
             detail_scroll: 0,
             should_quit: false,
@@ -302,6 +406,15 @@ impl AppState {
         self.sync_selected_category_to_filter();
     }
 
+    fn open_help(&mut self) {
+        self.help_open = true;
+        self.error = None;
+    }
+
+    fn close_help(&mut self) {
+        self.help_open = false;
+    }
+
     fn start_config_filter(&mut self) {
         self.config_filter_active = true;
         self.error = None;
@@ -451,6 +564,7 @@ impl AppState {
                     .filter_map(|index| self.categories.get(index).map(settings::category_key))
                     .collect(),
             },
+            keybinds: self.keybinds.as_settings(),
         }
     }
 
@@ -619,7 +733,17 @@ async fn run_event_loop(
 }
 
 async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
+    if state.help_open {
+        handle_help_key(state, key);
+        return;
+    }
+
     if state.config_open {
+        if !state.config_filter_active && state.keybinds.matches_help(key) {
+            state.open_help();
+            return;
+        }
+
         handle_category_config_key(state, key);
         return;
     }
@@ -629,10 +753,14 @@ async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
         return;
     }
 
+    if state.keybinds.matches_help(key) {
+        state.open_help();
+        return;
+    }
+
     if state.detail_open {
         match key.code {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
-            KeyCode::Char('q') => state.quit(),
             KeyCode::Esc | KeyCode::Enter => state.close_detail(),
             KeyCode::Down | KeyCode::Char('j') => state.move_next(),
             KeyCode::Up | KeyCode::Char('k') => state.move_previous(),
@@ -640,14 +768,14 @@ async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
             KeyCode::PageUp => state.page_previous(),
             _ => {}
         }
+        if state.keybinds.matches_quit(key) {
+            state.quit();
+        }
         return;
     }
 
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
-        KeyCode::Char('c') => state.open_category_config(),
-        KeyCode::Char('/') => state.start_category_filter(),
-        KeyCode::Char('q') => state.quit(),
         KeyCode::Esc if state.has_category_filter() => state.clear_category_filter(),
         KeyCode::Esc => state.quit(),
         KeyCode::Tab => state.next_focus(),
@@ -662,11 +790,21 @@ async fn handle_key(state: &mut AppState, client: &KagiClient, key: KeyEvent) {
             Focus::Categories => state.update_category_filter_status(),
             Focus::Articles => state.open_detail(),
         },
-        KeyCode::Char('r') if state.selected_category_matches_filter() => {
-            state.load_selected_category(client).await
-        }
-        KeyCode::Char('r') => state.update_category_filter_status(),
         _ => {}
+    }
+
+    if state.keybinds.matches_config(key) {
+        state.open_category_config();
+    } else if state.keybinds.matches_category_filter(key) {
+        state.start_category_filter();
+    } else if state.keybinds.matches_quit(key) {
+        state.quit();
+    } else if state.keybinds.matches_refresh(key) {
+        if state.selected_category_matches_filter() {
+            state.load_selected_category(client).await;
+        } else {
+            state.update_category_filter_status();
+        }
     }
 }
 
@@ -694,16 +832,34 @@ fn handle_category_config_key(state: &mut AppState, key: KeyEvent) {
 
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
-        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => state.close_category_config(),
-        KeyCode::Char('/') => state.start_config_filter(),
+        KeyCode::Esc | KeyCode::Enter => state.close_category_config(),
         KeyCode::Backspace if state.has_config_filter() => state.clear_config_filter(),
         KeyCode::Down | KeyCode::Char('j') => state.move_config_category_by(1, true),
         KeyCode::Up | KeyCode::Char('k') => state.move_config_category_by(-1, true),
         KeyCode::PageDown => state.move_config_category_by(10, false),
         KeyCode::PageUp => state.move_config_category_by(-10, false),
         KeyCode::Char(' ') => state.toggle_config_category(),
-        KeyCode::Char('d') => state.reset_default_category_config(),
         _ => {}
+    }
+
+    if state.keybinds.matches_quit(key) {
+        state.close_category_config();
+    } else if state.keybinds.matches_category_filter(key) {
+        state.start_config_filter();
+    } else if state.keybinds.matches_reset_defaults(key) {
+        state.reset_default_category_config();
+    }
+}
+
+fn handle_help_key(state: &mut AppState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => state.quit(),
+        KeyCode::Esc | KeyCode::Enter => state.close_help(),
+        _ => {
+            if state.keybinds.matches_help(key) || state.keybinds.matches_quit(key) {
+                state.close_help();
+            }
+        }
     }
 }
 
@@ -736,17 +892,31 @@ fn find_category(categories: &[Category], requested: &str) -> Option<usize> {
     })
 }
 
-fn load_enabled_categories(categories: &[Category]) -> (Vec<bool>, Option<String>) {
+fn configured_key(value: &str, default: char) -> char {
+    let mut chars = value.chars();
+
+    match (chars.next(), chars.next()) {
+        (Some(key), None) if !key.is_control() => key,
+        _ => default,
+    }
+}
+
+fn key_matches_char(key: KeyEvent, configured: char) -> bool {
+    matches!(key.code, KeyCode::Char(actual) if actual == configured)
+        && !key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn key_label(key: char) -> String {
+    match key {
+        ' ' => "Space".to_owned(),
+        _ => key.to_string(),
+    }
+}
+
+fn load_settings() -> (Settings, Option<String>) {
     match Settings::load() {
-        Ok(settings) => {
-            let enabled_categories = enabled_categories_from_settings(categories, &settings)
-                .unwrap_or_else(|| default_enabled_categories(categories));
-            (enabled_categories, None)
-        }
-        Err(error) => (
-            default_enabled_categories(categories),
-            Some(error.to_string()),
-        ),
+        Ok(settings) => (settings, None),
+        Err(error) => (Settings::default(), Some(error.to_string())),
     }
 }
 
@@ -885,6 +1055,7 @@ mod tests {
         AppState {
             enabled_categories: vec![true; categories.len()],
             categories,
+            keybinds: KeyBindings::default(),
             selected_category: 0,
             loaded_category: Some(0),
             articles: Vec::new(),
@@ -898,6 +1069,7 @@ mod tests {
             config_selected_category: 0,
             config_filter: String::new(),
             config_filter_active: false,
+            help_open: false,
             detail_open: false,
             detail_scroll: 0,
             should_quit: false,
@@ -1056,6 +1228,7 @@ mod tests {
             categories: CategorySettings {
                 enabled: vec!["technology".to_owned(), "todayinhistory".to_owned()],
             },
+            ..Settings::default()
         };
 
         let enabled = enabled_categories_from_settings(&categories, &settings).unwrap();
@@ -1084,8 +1257,59 @@ mod tests {
             Settings {
                 categories: CategorySettings {
                     enabled: vec!["todayinhistory".to_owned()]
-                }
+                },
+                keybinds: KeyBindingSettings::default(),
             }
         );
+    }
+
+    #[test]
+    fn default_config_keybind_is_comma() {
+        assert_eq!(KeyBindings::default().config, ',');
+    }
+
+    #[test]
+    fn keybinds_use_configured_single_character_values() {
+        let settings = KeyBindingSettings {
+            help: "h".to_owned(),
+            config: ";".to_owned(),
+            category_filter: "f".to_owned(),
+            refresh: "u".to_owned(),
+            quit: "x".to_owned(),
+            reset_defaults: "D".to_owned(),
+        };
+
+        assert_eq!(
+            KeyBindings::from_settings(&settings),
+            KeyBindings {
+                help: 'h',
+                config: ';',
+                category_filter: 'f',
+                refresh: 'u',
+                quit: 'x',
+                reset_defaults: 'D',
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_keybind_values_fall_back_to_defaults() {
+        let settings = KeyBindingSettings {
+            help: String::new(),
+            config: "two".to_owned(),
+            category_filter: "\n".to_owned(),
+            refresh: "u".to_owned(),
+            quit: "x".to_owned(),
+            reset_defaults: "D".to_owned(),
+        };
+
+        let keybinds = KeyBindings::from_settings(&settings);
+
+        assert_eq!(keybinds.help, '?');
+        assert_eq!(keybinds.config, ',');
+        assert_eq!(keybinds.category_filter, '/');
+        assert_eq!(keybinds.refresh, 'u');
+        assert_eq!(keybinds.quit, 'x');
+        assert_eq!(keybinds.reset_defaults, 'D');
     }
 }

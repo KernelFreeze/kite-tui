@@ -20,12 +20,49 @@ pub type Result<T> = std::result::Result<T, SettingsError>;
 pub struct Settings {
     #[serde(default)]
     pub categories: CategorySettings,
+
+    #[serde(default)]
+    pub keybinds: KeyBindingSettings,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CategorySettings {
     #[serde(default)]
     pub enabled: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyBindingSettings {
+    #[serde(default = "default_help_key")]
+    pub help: String,
+
+    #[serde(default = "default_config_key")]
+    pub config: String,
+
+    #[serde(default = "default_category_filter_key")]
+    pub category_filter: String,
+
+    #[serde(default = "default_refresh_key")]
+    pub refresh: String,
+
+    #[serde(default = "default_quit_key")]
+    pub quit: String,
+
+    #[serde(default = "default_reset_defaults_key")]
+    pub reset_defaults: String,
+}
+
+impl Default for KeyBindingSettings {
+    fn default() -> Self {
+        Self {
+            help: default_help_key(),
+            config: default_config_key(),
+            category_filter: default_category_filter_key(),
+            refresh: default_refresh_key(),
+            quit: default_quit_key(),
+            reset_defaults: default_reset_defaults_key(),
+        }
+    }
 }
 
 impl Settings {
@@ -121,6 +158,30 @@ fn display_path(path: &Path) -> String {
     path.display().to_string()
 }
 
+fn default_help_key() -> String {
+    "?".to_owned()
+}
+
+fn default_config_key() -> String {
+    ",".to_owned()
+}
+
+fn default_category_filter_key() -> String {
+    "/".to_owned()
+}
+
+fn default_refresh_key() -> String {
+    "r".to_owned()
+}
+
+fn default_quit_key() -> String {
+    "q".to_owned()
+}
+
+fn default_reset_defaults_key() -> String {
+    "d".to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,11 +218,35 @@ mod tests {
             categories: CategorySettings {
                 enabled: vec!["world".to_owned(), "technology".to_owned()],
             },
+            keybinds: KeyBindingSettings::default(),
         };
 
         let encoded = toml::to_string(&settings).unwrap();
         let decoded = toml::from_str::<Settings>(&encoded).unwrap();
 
         assert_eq!(decoded, settings);
+    }
+
+    #[test]
+    fn missing_keybinds_use_defaults() {
+        let decoded = toml::from_str::<Settings>(
+            r#"
+            [categories]
+            enabled = ["world"]
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            decoded.keybinds,
+            KeyBindingSettings {
+                help: "?".to_owned(),
+                config: ",".to_owned(),
+                category_filter: "/".to_owned(),
+                refresh: "r".to_owned(),
+                quit: "q".to_owned(),
+                reset_defaults: "d".to_owned(),
+            }
+        );
     }
 }
