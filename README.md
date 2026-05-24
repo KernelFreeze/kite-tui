@@ -13,6 +13,11 @@ Kite TUI is published on crates.io as `kite-tui`:
 cargo install kite-tui
 ```
 
+Prebuilt archives are on the
+[latest GitHub release](https://github.com/KernelFreeze/kite-tui/releases/latest).
+Download the archive for your platform, extract it, and put the `kite-tui`
+binary somewhere on your `PATH`. On Windows, the binary is `kite-tui.exe`.
+
 After installing, run it with:
 
 ```bash
