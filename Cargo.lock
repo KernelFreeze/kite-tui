@@ -1433,7 +1433,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kite"
+name = "kite-tui"
 version = "0.1.0"
 dependencies = [
  "clap",
