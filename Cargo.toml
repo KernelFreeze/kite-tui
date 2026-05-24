@@ -1,6 +1,8 @@
 [package]
 name = "kite-tui"
 version = "0.1.0"
+description = "A terminal reader for Kagi News."
+repository = "https://github.com/KernelFreeze/kite-tui"
 license = "MIT"
 edition = "2024"
 authors = ["Celeste Peláez <celeste@etheryal.net>"]
