@@ -5,7 +5,21 @@ Kite TUI is a terminal reader for [Kagi News](https://news.kagi.com/). It loads 
 public category index, fetches category RSS feeds, and lets you browse the
 latest Kagi summaries without leaving the terminal.
 
-## Run
+## Install
+
+Kite TUI is published on crates.io as `kite-tui`:
+
+```bash
+cargo install kite-tui
+```
+
+After installing, run it with:
+
+```bash
+kite-tui
+```
+
+## Run from source
 
 ```bash
 cargo run
