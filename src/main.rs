@@ -1,5 +1,5 @@
 use clap::Parser;
-use kite::{args::Args, error::Result};
+use kite_tui::{args::Args, error::Result};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -7,7 +7,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     init_tracing(&args.log_filter);
 
-    kite::run(args).await
+    kite_tui::run(args).await
 }
 
 fn init_tracing(filter: &str) {
