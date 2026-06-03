@@ -41,7 +41,7 @@ toml = "1.1.2"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 url = { version = "2.5.7", features = ["serde"] }
-uuid = { version = "1.18.1", features = ["serde", "v5"] }
+uuid = { version = "1.23.2", features = ["serde", "v5"] }
 
 # The profile that 'dist' will build with
 [profile.dist]
