@@ -1,7 +1,5 @@
-use std::{
-    fs, io,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -17,7 +15,7 @@ const THEMES_DIR: &str = "themes";
 
 pub type Result<T> = std::result::Result<T, SettingsError>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub theme: ThemeSettings,
@@ -27,16 +25,6 @@ pub struct Settings {
 
     #[serde(default)]
     pub keybinds: KeyBindingSettings,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            theme: ThemeSettings::default(),
-            categories: CategorySettings::default(),
-            keybinds: KeyBindingSettings::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,8 +282,9 @@ fn default_jump_bottom_key() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use url::Url;
+
+    use super::*;
 
     fn category(name: &str, file: &str) -> Category {
         Category {

@@ -1,8 +1,6 @@
-use std::{
-    collections::BTreeSet,
-    fs, io,
-    path::{Path, PathBuf},
-};
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -182,9 +180,10 @@ fn display_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
     use crate::models::SummaryBlock;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn article(id: Uuid) -> Article {
         Article {

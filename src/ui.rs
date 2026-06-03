@@ -1,17 +1,14 @@
-use ratatui::{
-    Frame,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
-};
-use time::{OffsetDateTime, macros::format_description};
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use time::OffsetDateTime;
+use time::macros::format_description;
 
-use crate::{
-    app::{AppState, Focus, KeyBindingAction, SettingsSection, ThemeSelectionMode},
-    models::{Article, SummaryBlock},
-    theme::Theme,
-};
+use crate::app::{AppState, Focus, KeyBindingAction, SettingsSection, ThemeSelectionMode};
+use crate::models::{Article, SummaryBlock};
+use crate::theme::Theme;
 
 pub fn draw(frame: &mut Frame<'_>, app: &AppState) {
     let area = frame.area();
@@ -363,7 +360,10 @@ fn render_config_filter(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     let value = if app.has_config_filter() {
         app.config_filter.clone()
     } else {
-        format!("press {} to search", app.keybinds.category_filter_label())
+        format!(
+            "press {} to search",
+            app.keybinds.action_label(KeyBindingAction::CategoryFilter)
+        )
     };
 
     let paragraph = Paragraph::new(Line::from(vec![
@@ -601,23 +601,39 @@ fn render_help_popup(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
     frame.render_widget(Clear, popup);
 
     let lines = vec![
-        help_line(&app.theme, app.keybinds.help_label(), "Open help"),
-        help_line(&app.theme, app.keybinds.settings_label(), "Open settings"),
         help_line(
             &app.theme,
-            app.keybinds.category_filter_label(),
+            app.keybinds.action_label(KeyBindingAction::Help),
+            "Open help",
+        ),
+        help_line(
+            &app.theme,
+            app.keybinds.action_label(KeyBindingAction::Settings),
+            "Open settings",
+        ),
+        help_line(
+            &app.theme,
+            app.keybinds.action_label(KeyBindingAction::CategoryFilter),
             "Filter categories",
         ),
-        help_line(&app.theme, app.keybinds.refresh_label(), "Refresh category"),
         help_line(
             &app.theme,
-            app.keybinds.refresh_all_label(),
+            app.keybinds.action_label(KeyBindingAction::Refresh),
+            "Refresh category",
+        ),
+        help_line(
+            &app.theme,
+            app.keybinds.action_label(KeyBindingAction::RefreshAll),
             "Refresh all categories",
         ),
-        help_line(&app.theme, app.keybinds.quit_label(), "Quit or close popup"),
         help_line(
             &app.theme,
-            app.keybinds.reset_defaults_label(),
+            app.keybinds.action_label(KeyBindingAction::Quit),
+            "Quit or close popup",
+        ),
+        help_line(
+            &app.theme,
+            app.keybinds.action_label(KeyBindingAction::ResetDefaults),
             "Restore defaults in settings",
         ),
         help_line(
@@ -635,8 +651,9 @@ fn render_help_popup(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
             &app.theme,
             format!(
                 "{}/{}",
-                app.keybinds.next_category_label(),
-                app.keybinds.previous_category_label()
+                app.keybinds.action_label(KeyBindingAction::NextCategory),
+                app.keybinds
+                    .action_label(KeyBindingAction::PreviousCategory)
             ),
             "Next or previous category",
         ),
@@ -707,7 +724,7 @@ fn render_status(frame: &mut Frame<'_>, app: &AppState, area: Rect) {
             Focus::Articles => "Articles",
         }
     };
-    let help = format!("{} help", app.keybinds.help_label());
+    let help = format!("{} help", app.keybinds.action_label(KeyBindingAction::Help));
     let status = app.error.as_deref().unwrap_or(&app.status);
     let paragraph = Paragraph::new(Line::from(vec![
         Span::styled(focus, fg(app.theme.colors.status)),

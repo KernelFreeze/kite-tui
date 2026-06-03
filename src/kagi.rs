@@ -1,6 +1,8 @@
-use std::{cmp::Reverse, time::Duration};
+use std::cmp::Reverse;
+use std::time::Duration;
 
-use feed_rs::{model::Entry, parser};
+use feed_rs::model::Entry;
+use feed_rs::parser;
 use scraper::{ElementRef, Html, Node};
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -8,10 +10,8 @@ use tracing::{debug, instrument};
 use url::Url;
 use uuid::Uuid;
 
-use crate::{
-    error::{KiteError, Result},
-    models::{Article, Category, SummaryBlock},
-};
+use crate::error::{KiteError, Result};
+use crate::models::{Article, Category, SummaryBlock};
 
 const INDEX_FILE: &str = "kite.json";
 

@@ -73,6 +73,17 @@ cargo run -- --base-url https://news.kagi.com/
 Kite TUI stores category visibility and keybinds in a TOML settings file under
 the platform configuration directory.
 
+### Configuration location
+
+The `settings.toml` file (and the `themes` directory) live in the platform
+configuration directory:
+
+| Platform | Path |
+| -------- | ---- |
+| Linux    | `$XDG_CONFIG_HOME/kite/settings.toml` or `~/.config/kite/settings.toml` |
+| macOS    | `~/Library/Application Support/dev.CelesteLove.Kite/settings.toml` |
+| Windows  | `%APPDATA%\CelesteLove\Kite\config\settings.toml` (e.g. `C:\Users\<You>\AppData\Roaming\CelesteLove\Kite\config\settings.toml`) |
+
 Themes and keybinds can also be customized in the same file:
 
 ```toml

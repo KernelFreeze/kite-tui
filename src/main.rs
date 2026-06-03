@@ -1,5 +1,6 @@
 use clap::Parser;
-use kite_tui::{args::Args, error::Result};
+use kite_tui::args::Args;
+use kite_tui::error::Result;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
